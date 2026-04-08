@@ -1,0 +1,67 @@
+# SQL Query Optimization Rules for ast-grep
+# These rules detect performance anti-patterns in SQL queries embedded in bash
+
+rules:
+  # Rule 1: Detect correlated subquery pattern (SELECT MAX ... WHERE ... = (SELECT MAX ...))
+  # This is the main performance issue in latest_msg and last_model CTEs
+  - id: correlated-subquery-max
+    message: Correlated subquery with MAX() detected - should use window function ROW_NUMBER() OVER instead
+    severity: warning
+    language: bash
+    rule:
+      all:
+        - kind: command
+          has:
+            pattern: sqlite3 $ARG
+            stopBy: end
+        - has:
+            pattern: "SELECT MAX($EXPR) FROM $TABLE WHERE $WHERE = (SELECT MAX($SUB) FROM $SUBTABLE WHERE $SUBWHERE = $MAINWHERE)"
+            stopBy: end
+
+  # Rule 2: Detect json_extract in subquery - multiple extractions on same data
+  - id: repeated-json-extract
+    message: Multiple json_extract calls on same data - should extract once and reference multiple times
+    severity: warning
+    language: bash
+    rule:
+      all:
+        - kind: command
+          has:
+            pattern: sqlite3 $ARG
+            stopBy: end
+        - has:
+            pattern: "json_extract($DATA, '$.$FIELD1') as $ALIAS1"
+            stopBy: end
+        - has:
+            pattern: "json_extract($DATA, '$.$FIELD2') as $ALIAS2"
+            stopBy: end
+
+  # Rule 3: Detect CTE with correlated subquery in WHERE clause
+  - id: cte-correlated-where
+    message: CTE uses correlated subquery in WHERE - should use window function instead
+    severity: warning
+    language: bash
+    rule:
+      all:
+        - kind: command
+          has:
+            pattern: sqlite3 $ARG
+            stopBy: end
+        - has:
+            pattern: "WITH $NAME AS ($SELECT WHERE $COL = (SELECT MAX($SUB) FROM $SUBTABLE WHERE $COND))"
+            stopBy: end
+
+  # Rule 4: Detect subquery in IN clause (performance issue)
+  - id: subquery-in-where
+    message: Subquery in WHERE clause - consider JOIN or window function
+    severity: info
+    language: bash
+    rule:
+      all:
+        - kind: command
+          has:
+            pattern: sqlite3 $ARG
+            stopBy: end
+        - has:
+            pattern: "WHERE $COL IN (SELECT $EXPR FROM $TABLE WHERE $COND)"
+            stopBy: end
