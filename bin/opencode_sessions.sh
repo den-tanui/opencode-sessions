@@ -388,7 +388,7 @@ handle_session() {
 
   # Get session directory from database
   local directory
-  directory=$(sqlite3 "$DB_PATH" "SELECT directory FROM session WHERE id = '${session_id}';")
+  directory=$(sqlite3 "$DB_PATH" "SELECT directory FROM session_v2 WHERE id = '${session_id}';")
 
   if [[ -z "$directory" ]]; then
     echo -e "${RED}Error: Could not find directory for session ${session_id}${RESET}"
