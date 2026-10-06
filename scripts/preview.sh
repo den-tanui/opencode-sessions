@@ -33,7 +33,7 @@ fi
 SESSION_DATA=$(sqlite3 -separator '|' "$DB_PATH" "
     SELECT s.id, s.title, s.directory, s.time_updated, s.time_created,
            s.permission, p.worktree, p.name
-    FROM session s
+    FROM session_v2 s
     JOIN project p ON s.project_id = p.id
     WHERE s.id = '${SESSION_ID}';
 " 2>/dev/null) || true
@@ -47,54 +47,91 @@ IFS='|' read -r id title directory time_updated time_created permission worktree
 
 # Get status (recompute for accuracy in preview)
 STATUS=$(sqlite3 "$DB_PATH" "
-    SELECT CASE
-        WHEN (
-            SELECT COUNT(*) FROM part p
-            WHERE p.session_id = '${SESSION_ID}'
-              AND json_extract(p.data, '\$.type') = 'tool'
-              AND json_extract(p.data, '\$.tool') IN ('question','plan_exit')
-              AND json_extract(p.data, '\$.state.status') = 'running'
-              AND p.message_id = (
-                  SELECT id FROM message WHERE session_id = '${SESSION_ID}'
-                  ORDER BY time_created DESC LIMIT 1
-              )
-        ) > 0 THEN 'needs-input'
-        WHEN (
-            SELECT COUNT(*) FROM part p
-            JOIN message m ON m.id = p.message_id
-            JOIN session s ON s.id = m.session_id
-            WHERE s.parent_id = '${SESSION_ID}'
-              AND s.time_archived IS NULL
-              AND json_extract(p.data, '\$.type') = 'tool'
-              AND json_extract(p.data, '\$.tool') IN ('question','plan_exit')
-              AND json_extract(p.data, '\$.state.status') = 'running'
-        ) > 0 THEN 'needs-input'
-        WHEN (
-            SELECT COUNT(*) FROM part p
-            WHERE p.session_id = '${SESSION_ID}'
-              AND json_extract(p.data, '\$.type') = 'tool'
-              AND json_extract(p.data, '\$.state.status') = 'error'
-              AND p.message_id = (
-                  SELECT id FROM message WHERE session_id = '${SESSION_ID}'
-                  ORDER BY time_created DESC LIMIT 1
-              )
-        ) > 0 THEN 'error'
-        WHEN (
-            SELECT json_extract(data, '\$.role') FROM message
-            WHERE session_id = '${SESSION_ID}'
-            ORDER BY time_created DESC LIMIT 1
-        ) = 'assistant' AND (
-            SELECT json_extract(data, '\$.time.completed') FROM message
-            WHERE session_id = '${SESSION_ID}'
-            ORDER BY time_created DESC LIMIT 1
-        ) IS NULL THEN 'working'
-        WHEN (
-            SELECT json_extract(data, '\$.role') FROM message
-            WHERE session_id = '${SESSION_ID}'
-            ORDER BY time_created DESC LIMIT 1
-        ) = 'user' THEN 'working'
-        ELSE 'idle'
-    END;
+SELECT CASE
+    -- needs-input: running question/plan_exit in latest assistant message
+    WHEN (
+        SELECT COUNT(*) FROM (
+          SELECT json_extract(j.value, '\$.type') as ctype,
+                 json_extract(j.value, '\$.name') as cname,
+                 json_extract(j.value, '\$.state.status') as cstatus
+          FROM session_message sm,
+               json_each(sm.data, '\$.content') as j
+          WHERE sm.session_id = '${SESSION_ID}'
+            AND sm.type = 'assistant'
+            AND sm.seq = (
+              SELECT MAX(seq) FROM session_message
+              WHERE session_id = '${SESSION_ID}' AND type = 'assistant'
+            )
+            AND json_extract(j.value, '\$.type') = 'tool'
+            AND json_extract(j.value, '\$.name') IN ('question', 'plan_exit')
+            AND json_extract(j.value, '\$.state.status') = 'running'
+        )
+    ) > 0 THEN 'needs-input'
+
+    -- needs-input: running question in child sessions
+    WHEN (
+        SELECT COUNT(*) FROM (
+          SELECT json_extract(j.value, '\$.type') as ctype,
+                 json_extract(j.value, '\$.name') as cname,
+                 json_extract(j.value, '\$.state.status') as cstatus
+          FROM session_message sm
+          JOIN session_v2 child ON child.id = sm.session_id
+          CROSS JOIN json_each(sm.data, '\$.content') as j
+          WHERE child.parent_id = '${SESSION_ID}'
+            AND child.time_archived IS NULL
+            AND sm.type = 'assistant'
+            AND json_extract(j.value, '\$.type') = 'tool'
+            AND json_extract(j.value, '\$.name') IN ('question', 'plan_exit')
+            AND json_extract(j.value, '\$.state.status') = 'running'
+            AND sm.seq = (
+              SELECT MAX(seq) FROM session_message
+              WHERE session_id = child.id AND type = 'assistant'
+            )
+        )
+    ) > 0 THEN 'needs-input'
+
+    -- error: tool with error status in latest assistant message
+    WHEN (
+        SELECT COUNT(*) FROM (
+          SELECT json_extract(j.value, '\$.type') as ctype,
+                 json_extract(j.value, '\$.state.status') as cstatus
+          FROM session_message sm,
+               json_each(sm.data, '\$.content') as j
+          WHERE sm.session_id = '${SESSION_ID}'
+            AND sm.type = 'assistant'
+            AND sm.seq = (
+              SELECT MAX(seq) FROM session_message
+              WHERE session_id = '${SESSION_ID}' AND type = 'assistant'
+            )
+            AND json_extract(j.value, '\$.type') = 'tool'
+            AND json_extract(j.value, '\$.state.status') = 'error'
+        )
+    ) > 0 THEN 'error'
+
+    -- working: last message is assistant with no completion time
+    WHEN (
+        SELECT sm.type FROM session_message sm
+        WHERE sm.session_id = '${SESSION_ID}'
+          AND sm.seq = (SELECT MAX(seq) FROM session_message WHERE session_id = '${SESSION_ID}')
+        LIMIT 1
+    ) = 'assistant' AND (
+        SELECT json_extract(sm.data, '\$.time.completed')
+        FROM session_message sm
+        WHERE sm.session_id = '${SESSION_ID}'
+          AND sm.seq = (SELECT MAX(seq) FROM session_message WHERE session_id = '${SESSION_ID}')
+        LIMIT 1
+    ) IS NULL THEN 'working'
+
+    -- working: last message is user
+    WHEN (
+        SELECT sm.type FROM session_message sm
+        WHERE sm.session_id = '${SESSION_ID}'
+          AND sm.seq = (SELECT MAX(seq) FROM session_message WHERE session_id = '${SESSION_ID}')
+        LIMIT 1
+    ) = 'user' THEN 'working'
+
+    ELSE 'idle'
+END as status;
 ")
 
 # Status icon
@@ -106,14 +143,9 @@ idle) STATUS_ICON="${DIM}⚪${RESET} ${DIM}idle${RESET}" ;;
 *) STATUS_ICON="${DIM}⚪${RESET} ${DIM}unknown${RESET}" ;;
 esac
 
-# Model
+# Model — direct column on session_v2 (no JSON extraction needed)
 MODEL=$(sqlite3 "$DB_PATH" "
-    SELECT json_extract(data, '\$.modelID')
-    FROM message
-    WHERE session_id = '${SESSION_ID}'
-      AND json_extract(data, '\$.role') = 'assistant'
-      AND json_extract(data, '\$.modelID') IS NOT NULL
-    ORDER BY time_created DESC LIMIT 1;
+    SELECT model FROM session_v2 WHERE id = '${SESSION_ID}';
 " 2>/dev/null) || true
 
 # Shorten model
@@ -143,22 +175,32 @@ fi
 
 # Child session count
 CHILD_COUNT=$(sqlite3 "$DB_PATH" "
-    SELECT COUNT(*) FROM session
+    SELECT COUNT(*) FROM session_v2
     WHERE parent_id = '${SESSION_ID}' AND time_archived IS NULL;
 ")
 
-# Last message preview
+# Last message preview — branch on message type for v2 schema
+# User/system/synthetic: flat $.text; assistant: $.content[N].text
 LAST_MSG=$(sqlite3 "$DB_PATH" "
-    SELECT json_extract(p.data, '\$.text')
-    FROM part p
-    JOIN message m ON p.message_id = m.id
-    WHERE p.session_id = '${SESSION_ID}'
-      AND json_extract(p.data, '\$.type') = 'text'
-      AND json_extract(p.data, '\$.text') IS NOT NULL
-      AND json_extract(p.data, '\$.text') != ''
-      AND json_extract(p.data, '\$.text') NOT LIKE '<%'
-    ORDER BY m.time_created DESC, p.time_created DESC
-    LIMIT 1;
+  SELECT
+    CASE
+      WHEN sm.type IN ('user', 'system', 'synthetic') THEN
+        json_extract(sm.data, '\$.text')
+      WHEN sm.type = 'assistant' THEN
+        (SELECT json_extract(j.value, '\$.text')
+         FROM json_each(sm.data, '\$.content') as j
+         WHERE json_extract(j.value, '\$.type') = 'text'
+           AND json_extract(j.value, '\$.text') IS NOT NULL
+           AND json_extract(j.value, '\$.text') != ''
+           AND json_extract(j.value, '\$.text') NOT LIKE '<%'
+         ORDER BY json_extract(j.value, '\$.time.created') DESC
+         LIMIT 1)
+      ELSE NULL
+    END as last_text
+  FROM session_message sm
+  WHERE sm.session_id = '${SESSION_ID}'
+    AND sm.seq = (SELECT MAX(seq) FROM session_message WHERE session_id = '${SESSION_ID}')
+  LIMIT 1;
 " 2>/dev/null) || true
 [[ -z "$LAST_MSG" ]] && LAST_MSG="${DIM}(no messages)${RESET}"
 # Truncate to 300 chars
@@ -166,27 +208,32 @@ if [[ ${#LAST_MSG} -gt 300 ]]; then
 	LAST_MSG="${LAST_MSG:0:300}${DIM}...${RESET}"
 fi
 
-# Modified files
+# Modified files — v2: session_message content array tool items
 MODIFIED_FILES=$(sqlite3 "$DB_PATH" "
     SELECT DISTINCT
       COALESCE(
-        json_extract(p.data, '\$.files'),
-        json_extract(p.data, '\$.state.input.filePath')
-      ) as file_raw
-    FROM part p
-    WHERE p.session_id = '${SESSION_ID}'
-      AND (
-        (json_extract(p.data, '\$.type') = 'patch' AND json_extract(p.data, '\$.files') IS NOT NULL)
-        OR
-        (json_extract(p.data, '\$.tool') IN ('edit', 'write', 'apply_patch')
-         AND json_extract(p.data, '\$.state.status') = 'completed')
-      );
+        json_extract(j.value, '\$.state.input.filePath'),
+        json_extract(j.value, '\$.state.input.path'),
+        json_extract(j.value, '\$.state.input.file')
+      ) as file_path
+    FROM session_message sm,
+         json_each(sm.data, '\$.content') as j
+    WHERE sm.session_id = '${SESSION_ID}'
+      AND sm.type = 'assistant'
+      AND json_extract(j.value, '\$.type') = 'tool'
+      AND json_extract(j.value, '\$.name') IN ('edit', 'write', 'apply_patch')
+      AND json_extract(j.value, '\$.state.status') = 'completed'
+      AND COALESCE(
+        json_extract(j.value, '\$.state.input.filePath'),
+        json_extract(j.value, '\$.state.input.path'),
+        json_extract(j.value, '\$.state.input.file')
+      ) IS NOT NULL;
 " 2>/dev/null) || true
 
 # Child sessions list
 CHILD_SESSIONS=$(sqlite3 -separator '|' "$DB_PATH" "
     SELECT s.id, s.title, s.directory
-    FROM session s
+    FROM session_v2 s
     WHERE s.parent_id = '${SESSION_ID}' AND s.time_archived IS NULL
     ORDER BY s.time_created DESC
     LIMIT 5;
