@@ -4,7 +4,7 @@
 # Get total session count
 get_total_count() {
 	local db_path="${1:-${HOME}/.local/share/opencode/opencode.db}"
-	sqlite3 "$db_path" "SELECT COUNT(*) FROM session WHERE time_archived IS NULL AND parent_id IS NULL;"
+	sqlite3 "$db_path" "SELECT COUNT(*) FROM session_v2 WHERE time_archived IS NULL AND parent_id IS NULL;"
 }
 
 get_sort_label() {
