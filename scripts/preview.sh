@@ -143,9 +143,9 @@ idle) STATUS_ICON="${DIM}⚪${RESET} ${DIM}idle${RESET}" ;;
 *) STATUS_ICON="${DIM}⚪${RESET} ${DIM}unknown${RESET}" ;;
 esac
 
-# Model — direct column on session_v2 (no JSON extraction needed)
+# Model — extract $.id from JSON object in session_v2.model column
 MODEL=$(sqlite3 "$DB_PATH" "
-    SELECT model FROM session_v2 WHERE id = '${SESSION_ID}';
+    SELECT json_extract(model, '\$.id') FROM session_v2 WHERE id = '${SESSION_ID}';
 " 2>/dev/null) || true
 
 # Shorten model

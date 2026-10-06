@@ -95,7 +95,7 @@ SELECT s.id, s.title, s.directory, s.time_updated, s.time_created,
        COALESCE(hcq.cnt, 0) as has_child_question,
        COALESCE(he.cnt, 0) as has_error,
        COALESCE(cc.cnt, 0) as child_count,
-       COALESCE(s.model, '') as model
+       COALESCE(json_extract(s.model, '\$.id'), '') as model
 FROM session_v2 s
 JOIN project p ON s.project_id = p.id
 LEFT JOIN latest_msg lm ON lm.session_id = s.id
