@@ -7,7 +7,7 @@
 #   ./bin/opencode_sessions.sh --copy       # Copy selected session ID to clipboard
 #   ./bin/opencode_sessions.sh --multi      # Multi-select mode
 #   ./bin/opencode_sessions.sh --filter working  # Only show working sessions
-#   ./bin/opencode_sessions.sh --sort status     # Start sorted by status
+#   ./bin/opencode_sessions.sh --new-window    # Open in new window without switching
 #
 # Dependencies: sqlite3, fzf, opencode
 
@@ -42,6 +42,18 @@ get_tmux_option() {
   echo "${value:-$default}"
 }
 
+# Check if running inside tmux
+is_in_tmux() {
+  [[ -n "${TMUX:-}" ]]
+}
+
+# Get current tmux session name
+get_current_tmux_session() {
+  if is_in_tmux; then
+    tmux display-message -p '#S' 2>/dev/null
+  fi
+}
+
 DAYS_FILTER=$(get_tmux_option "@opencode-sessions-days" "7")
 SORT_BY=$(get_tmux_option "@opencode-sessions-sort" "time")
 
@@ -53,6 +65,7 @@ MODE="interactive"
 FILTER_STATUS=""
 SHOW_ALL=false
 DIR_FILTER=""
+NEW_WINDOW_MODE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,6 +101,10 @@ while [[ $# -gt 0 ]]; do
     DIR_FILTER="$2"
     shift 2
     ;;
+  --new-window)
+    NEW_WINDOW_MODE=true
+    shift
+    ;;
   -h | --help)
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -100,6 +117,7 @@ while [[ $# -gt 0 ]]; do
     echo "  --dir DIR       Filter by specific directory (exact match)"
     echo "  --days N        Show sessions from last N days (default: 14)"
     echo "  --all           Show all sessions regardless of age"
+    echo "  --new-window    Open session in new window without switching tmux"
     echo "  -h, --help      Show this help"
     exit 0
     ;;
@@ -283,18 +301,42 @@ CYCLE_EOF
   local selected
   selected=$(format_for_display <"$sorted_file" | fzf \
     $FZF_OPTS \
+    --expect=ctrl-o \
     --with-nth 2.. \
-    --border-label "OpenCode Sessions" \
+    --border-label " OpenCode Sessions " \
     --preview "bash '${PREVIEW_SCRIPT}' {}" \
     --preview-window "right:60%,border-left" \
     --delimiter '\t' \
     --prompt="Select session: " \
-    --footer "Alt-S: cycle sort (current: $SORT_BY) | ↑/↓: navigate | Enter: resume | ?: toggle preview" \
+    --footer "Alt-S: cycle sort (current: $SORT_BY) | ↑/↓: navigate | Enter: resume | Ctrl-o: new window | ?: toggle preview" \
     --bind "?:toggle-preview" \
     --bind "alt-s:reload(bash '${cycle_script}')" \
     "${fzf_flags[@]}" \
     2>/dev/null) || true
 
+  if [[ -z "$selected" ]]; then
+    echo -e "${DIM}No session selected.${RESET}"
+    exit 0
+  fi
+
+  # Extract the key pressed (first line) and selection (remaining lines)
+  local key_pressed=""
+  local selection=""
+  if [[ -n "$selected" ]]; then
+    key_pressed=$(echo "$selected" | head -1)
+    selection=$(echo "$selected" | tail -n +2)
+  fi
+
+  # Determine if this is new-window mode (Ctrl-o pressed or --new-window flag)
+  local is_new_window="$NEW_WINDOW_MODE"
+  if [[ "$key_pressed" == "ctrl-o" ]]; then
+    is_new_window="true"
+  fi
+
+  # Restore selected for further processing
+  selected="$selection"
+
+  # Handle empty selection after key extraction
   if [[ -z "$selected" ]]; then
     echo -e "${DIM}No session selected.${RESET}"
     exit 0
@@ -327,13 +369,22 @@ CYCLE_EOF
   fi
 
   # Resume the first selected session with tmux session handling
-  handle_session "${session_ids[0]}"
+  # If new-window mode with multiple sessions, handle each
+  if [[ "$is_new_window" == "true" ]] && [[ ${#session_ids[@]} -gt 1 ]]; then
+    for sid in "${session_ids[@]}"; do
+      handle_session "$sid" "true"
+    done
+  else
+    # Single session or non-new-window mode
+    handle_session "${session_ids[0]}" "$is_new_window"
+  fi
 }
 
 # ─── Handle tmux session creation/switching ─────────────────────────────────
 
 handle_session() {
   local session_id="$1"
+  local is_new_window="${2:-false}"
 
   # Get session directory from database
   local directory
@@ -364,14 +415,27 @@ handle_session() {
   echo -e "${DIM}Directory: ${directory}${RESET}"
   echo -e "${DIM}Tmux session: ${session_name}${RESET}"
 
-  # Check if tmux session already exists
-  if tmux has-session -t "$session_name" 2>/dev/null; then
-    # Session exists - create new window instead of switching
+  # If new-window mode and not in tmux, fall back to cd + exec
+  if [[ "$is_new_window" == "true" ]] && ! is_in_tmux; then
+    echo -e "${DIM}Not in tmux - running opencode directly in directory${RESET}"
+    cd "$directory" && exec opencode -s "$session_id"
+  fi
+
+  # Handle based on new-window mode and tmux availability
+  if [[ "$is_new_window" == "true" ]] && is_in_tmux; then
+    # Create new window in current tmux session (don't switch)
+    local current_session
+    current_session=$(get_current_tmux_session)
+    echo -e "${DIM}Creating new window in current tmux session: ${current_session}${RESET}"
+    tmux new-window -t "$current_session" -c "$directory" -n "opencode" "exec opencode -s ${session_id}"
+    # Do NOT switch - stay in current window
+  elif tmux has-session -t "$session_name" 2>/dev/null; then
+    # Session exists - create new window
     echo -e "${DIM}Creating new window in existing tmux session${RESET}"
     tmux new-window -t "$session_name" -c "$directory" -n "opencode" "exec opencode -s ${session_id}"
     tmux switch-client -t "$session_name"
   else
-    # Create new tmux session and run resume directly
+    # Create new tmux session
     echo -e "${DIM}Creating new tmux session${RESET}"
     tmux new-session -d -s "$session_name" -c "$directory" "exec opencode -s ${session_id}"
     tmux switch-client -t "$session_name"

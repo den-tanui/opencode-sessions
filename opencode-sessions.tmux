@@ -22,4 +22,3 @@ set -g @opencode-sessions-fzf-opts "--height 80% --ansi --layout=reverse"
 # Key binding - reads options from tmux at runtime
 # Uses -n for no-prefix binding, -B to remove border if configured
 bind-key -n "#{@opencode-sessions-key}" run-shell -b "tmux display-popup #{?@opencode-sessions-popup-border,-B,} -w '#{@opencode-sessions-popup-width}' -h '#{@opencode-sessions-popup-height}' -xC -yC -E ${CURRENT_DIR}/bin/opencode_sessions.sh"
-
