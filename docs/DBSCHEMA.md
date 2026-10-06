@@ -440,8 +440,26 @@ The following queries are used by the `opencode-sessions` scripts in `lib/db.sh`
 5. **Child sessions** — Counts non-archived `session_v2` rows grouped by
    `parent_id`.
 
-6. **Model extraction** — Finds the latest assistant message with a non-null
-   `modelID` in the `data` JSON.
+6. **Model extraction** — Reads `session_v2.model` JSON column and extracts
+   `$.id` (e.g. `big-pickle` from `{"id":"big-pickle","providerID":"opencode"}`).
+
+## v1 → v2 Migration Reference
+
+The codebase was migrated from the v1 schema (`session`, `message`, `part`
+tables) to the v2 schema (`session_v2`, `session_message`; no `part` table).
+
+| v1 | v2 | Notes |
+|---|---|---|
+| `session` | `session_v2` | Renamed |
+| `message` | `session_message` | Renamed |
+| `part` table | gone | Parts embedded in `session_message.data` JSON `content` array |
+| `json_extract(data, '$.role')` | `session_message.type` column | Direct column |
+| `json_extract(data, '$.modelID')` | `json_extract(session_v2.model, '$.id')` | JSON object on session |
+| `json_extract(p.data, '$.type') = 'tool'` | `json_each(data, '$.content')` → `$.type = 'tool'` | Via `json_each` |
+| `json_extract(p.data, '$.tool')` | `json_extract(value, '$.name')` | Field renamed |
+| `json_extract(p.data, '$.state.status')` | `json_extract(value, '$.state.status')` | Via `json_each` |
+| `json_extract(p.data, '$.text')` (text) | `json_extract(value, '$.text')` via `json_each` | Assistant messages |
+| `json_extract(p.data, '$.text')` (text) | `json_extract(data, '$.text')` | User/system/synthetic (flat) |
 
 ## Notes
 
