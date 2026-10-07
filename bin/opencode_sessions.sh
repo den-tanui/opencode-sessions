@@ -516,22 +516,18 @@ handle_project() {
 
   # Get project name for display
   local project_name
-  project_name=$(sqlite3 "$DB_PATH" "SELECT name FROM project WHERE id = '${project_id}';")
+  project_name=$(db_scalar "$DB_PATH" "SELECT name FROM project WHERE id = '${project_id}';") || exit 1
   [[ -z "$project_name" ]] && project_name="$project_id"
 
   # Check if there are any active sessions for this project
   local session_count
-  session_count=$(sqlite3 "$DB_PATH" "
-    SELECT COUNT(*) FROM session_v2
-    WHERE project_id = '${project_id}'
-      AND time_archived IS NULL AND parent_id IS NULL;
-  ")
+  session_count=$(db_scalar "$DB_PATH" "SELECT COUNT(*) FROM session_v2 WHERE project_id = '${project_id}' AND time_archived IS NULL AND parent_id IS NULL;") || exit 1
 
   if [[ "$session_count" -eq 0 ]]; then
     echo -e "${YELLOW}No active sessions for project: ${project_name}${RESET}"
     # Get the project worktree to start a new session
     local worktree
-    worktree=$(sqlite3 "$DB_PATH" "SELECT worktree FROM project WHERE id = '${project_id}';")
+    worktree=$(db_scalar "$DB_PATH" "SELECT worktree FROM project WHERE id = '${project_id}';") || exit 1
     if [[ -n "$worktree" ]] && [[ -d "$worktree" ]]; then
       echo -e "${DIM}Starting opencode in ${worktree}${RESET}"
       if is_in_tmux; then
@@ -556,12 +552,7 @@ handle_project() {
   # If only one session, resume it directly
   if [[ "$session_count" -eq 1 ]]; then
     local session_id
-    session_id=$(sqlite3 "$DB_PATH" "
-      SELECT id FROM session_v2
-      WHERE project_id = '${project_id}'
-        AND time_archived IS NULL AND parent_id IS NULL
-      ORDER BY time_updated DESC LIMIT 1;
-    ")
+    session_id=$(db_scalar "$DB_PATH" "SELECT id FROM session_v2 WHERE project_id = '${project_id}' AND time_archived IS NULL AND parent_id IS NULL ORDER BY time_updated DESC LIMIT 1;") || exit 1
     handle_session "$session_id" "$is_new_window"
     return
   fi
@@ -630,7 +621,7 @@ handle_session() {
 
   # Get session directory from database
   local directory
-  directory=$(sqlite3 "$DB_PATH" "SELECT directory FROM session_v2 WHERE id = '${session_id}';")
+  directory=$(db_scalar "$DB_PATH" "SELECT directory FROM session_v2 WHERE id = '${session_id}';") || exit 1
 
   if [[ -z "$directory" ]]; then
     echo -e "${RED}Error: Could not find directory for session ${session_id}${RESET}"
