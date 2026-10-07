@@ -7,27 +7,28 @@
 # Get plugin directory dynamically
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Set default options
-set -g @opencode-sessions-days "30"
-set -g @opencode-sessions-sort "time"
-set -g @opencode-sessions-prefix "false"
-set -g @opencode-sessions-popup-height "80%"
-set -g @opencode-sessions-popup-width "80%"
-set -g @opencode-sessions-key "o"
-set -g @opencode-sessions-projects-key "O"
-set -g @opencode-sessions-popup-border "false"
+# Source tmux helper functions
+source "${CURRENT_DIR}/lib/tmux_helpers.sh"
 
-# FZF options - passed as single string
-set -g @opencode-sessions-fzf-opts "--height 80% --layout=reverse"
+# ─── Set defaults (only if user hasn't already configured them) ───────────────
+set_tmux_default @opencode-sessions-days "30"
+set_tmux_default @opencode-sessions-sort "time"
+set_tmux_default @opencode-sessions-prefix "false"
+set_tmux_default @opencode-sessions-popup-height "80%"
+set_tmux_default @opencode-sessions-popup-width "80%"
+set_tmux_default @opencode-sessions-key "o"
+set_tmux_default @opencode-sessions-projects-key "O"
+set_tmux_default @opencode-sessions-popup-border "false"
+set_tmux_default @opencode-sessions-fzf-opts "--height 80% --layout=reverse"
+set_tmux_default @opencode-sessions-ansi "true"
 
-# Enable ANSI colored output (true/false)
-set -g @opencode-sessions-ansi "true"
+# ─── Key bindings ─────────────────────────────────────────────────────────────
+# Uses tmux display-popup for the outer popup. The script runs inside the
+# popup, so chained fzf calls (project → session drill-down) stay within the
+# same popup without flicker.
 
-# Key binding - uses tmux display-popup for the outer popup.
-# The script runs inside the popup, so chained fzf calls (project →
-# session drill-down) stay within the same popup without flicker.
-# Tmux options are passed as CLI args to the script.
-bind-key -n "#{@opencode-sessions-key}" run-shell -b "tmux display-popup #{?@opencode-sessions-popup-border,-B,} -w '#{@opencode-sessions-popup-width}' -h '#{@opencode-sessions-popup-height}' -xC -yC -E \"${CURRENT_DIR}/bin/opencode_sessions.sh --days #{@opencode-sessions-days} --sort #{@opencode-sessions-sort} --fzf-opts '#{@opencode-sessions-fzf-opts}' #{?#{@opencode-sessions-ansi},--ansi,} #{?#{@opencode-sessions-prefix},--prefix '#{@opencode-sessions-prefix}',}\""
+sessions_key=$(get_tmux_option @opencode-sessions-key "o")
+projects_key=$(get_tmux_option @opencode-sessions-projects-key "O")
 
-# Projects key binding - same popup, but launches in projects mode.
-bind-key -n "#{@opencode-sessions-projects-key}" run-shell -b "tmux display-popup #{?@opencode-sessions-popup-border,-B,} -w '#{@opencode-sessions-popup-width}' -h '#{@opencode-sessions-popup-height}' -xC -yC -E \"${CURRENT_DIR}/bin/opencode_sessions.sh --projects --days #{@opencode-sessions-days} --sort #{@opencode-sessions-sort} --fzf-opts '#{@opencode-sessions-fzf-opts}' #{?#{@opencode-sessions-ansi},--ansi,} #{?#{@opencode-sessions-prefix},--prefix '#{@opencode-sessions-prefix}',}\""
+bind-key -n "$sessions_key" "$(build_popup_binding)"
+bind-key -n "$projects_key" "$(build_popup_binding --projects)"
