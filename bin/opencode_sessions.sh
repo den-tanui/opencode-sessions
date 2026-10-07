@@ -24,7 +24,7 @@ else
 fi
 
 # ─── Source library modules ───────────────────────────────────────────────────
-source "${SCRIPT_DIR}/lib/colors.sh"
+# colors.sh is sourced after arg parsing, once USE_ANSI is finalized
 source "${SCRIPT_DIR}/lib/helpers.sh"
 source "${SCRIPT_DIR}/lib/db.sh"
 source "${SCRIPT_DIR}/lib/format.sh"
@@ -48,14 +48,6 @@ get_current_tmux_session() {
 DAYS_FILTER=7
 SORT_BY="time"
 FZF_OPTS="--height 100% --layout=reverse --border"
-
-# Detect --ansi in FZF_OPTS to enable colored output
-if echo "$FZF_OPTS" | grep -qw -- '--ansi'; then
-  USE_ANSI=true
-else
-  USE_ANSI=false
-fi
-source "${SCRIPT_DIR}/lib/colors.sh"
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 MODE="interactive"
