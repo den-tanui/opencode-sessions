@@ -340,32 +340,12 @@ echo "\$idx" > "\$STATE_FILE"
 sort_field="\${sort_order[\$idx]}"
 
 USE_ANSI="$USE_ANSI"
-if [[ "\$USE_ANSI" == "true" ]]; then
-    RED=\$'\\033[0;31m'; GREEN=\$'\\033[0;32m'; YELLOW=\$'\\033[0;33m'; DIM=\$'\\033[2m'; RESET=\$'\\033[0m'
-else
-    RED=''; GREEN=''; YELLOW=''; DIM=''; RESET=''
-fi
+source "${SCRIPT_DIR}/lib/colors.sh"
 
 format_for_display() {
     while IFS=\$'\\t' read -r id status time_ago repo title model directory child_count; do
         local icon
-        if [[ "\$USE_ANSI" == "true" ]]; then
-            case "\$status" in
-                needs-input) icon="\${YELLOW}🟡\${RESET}" ;;
-                error)       icon="\${RED}🔴\${RESET}" ;;
-                working)     icon="\${GREEN}🟢\${RESET}" ;;
-                idle)        icon="\${DIM}⚪\${RESET}" ;;
-                *)           icon="\${DIM}⚪\${RESET}" ;;
-            esac
-        else
-            case "\$status" in
-                needs-input) icon="?" ;;
-                error)       icon="!" ;;
-                working)     icon="*" ;;
-                idle)        icon="." ;;
-                *)           icon="." ;;
-            esac
-        fi
+        icon=\$(status_icon "\$status")
         if [[ -n "\$model" ]]; then
             printf '%s\\t%-8s %-10s %-20s %s [%s]\\n' "\$id" "\$icon" "\$time_ago" "\$repo" "\$title" "\$model"
         else

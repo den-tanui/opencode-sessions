@@ -9,29 +9,9 @@ set -euo pipefail
 
 DB_PATH="${HOME}/.local/share/opencode/opencode.db"
 
-# Color codes (self-contained, no dependency on parent shell)
-# Respects USE_ANSI env var passed from parent script
-if [[ "${USE_ANSI:-false}" == "true" ]]; then
-  RED='\033[0;31m'
-  GREEN='\033[0;32m'
-  YELLOW='\033[0;33m'
-  CYAN='\033[0;36m'
-  MAGENTA='\033[0;35m'
-  WHITE='\033[1;37m'
-  DIM='\033[2m'
-  BOLD='\033[1m'
-  RESET='\033[0m'
-else
-  RED=''
-  GREEN=''
-  YELLOW=''
-  CYAN=''
-  MAGENTA=''
-  WHITE=''
-  DIM=''
-  BOLD=''
-  RESET=''
-fi
+# Source shared colors and icon definitions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "${SCRIPT_DIR}/lib/colors.sh"
 
 # Parse input - fzf passes the full line, we extract session_id from first field
 INPUT="${1:-}"
@@ -147,14 +127,8 @@ SELECT CASE
 END as status;
 ")
 
-# Status icon
-case "$STATUS" in
-needs-input) STATUS_ICON="${YELLOW}🟡${RESET} ${YELLOW}needs-input${RESET}" ;;
-error) STATUS_ICON="${RED}🔴${RESET} ${RED}error${RESET}" ;;
-working) STATUS_ICON="${GREEN}🟢${RESET} ${GREEN}working${RESET}" ;;
-idle) STATUS_ICON="${DIM}⚪${RESET} ${DIM}idle${RESET}" ;;
-*) STATUS_ICON="${DIM}⚪${RESET} ${DIM}unknown${RESET}" ;;
-esac
+# Status icon (uses shared function from colors.sh)
+STATUS_ICON=$(status_icon_label "$STATUS")
 
 # Model — extract $.id from JSON object in session_v2.model column
 MODEL=$(sqlite3 "$DB_PATH" "
