@@ -282,7 +282,7 @@ run_interactive() {
   # fzf shows col 2; ctrl-s just sorts on col 3 (time) or col 4 (repo)+col 3
   local display_file
   display_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${display_file:-}"' EXIT
+  trap 'rm -f "${cache_file:-}" "${display_file:-}" "${sort_state_file:-}"' EXIT
   format_for_display <"$cache_file" >"$display_file"
 
   local fzf_flags=()
@@ -299,42 +299,9 @@ run_interactive() {
   *) echo "0" >"$sort_state_file" ;;
   esac
 
-  # Cycle script — just sorts the display file on different columns
-  local cycle_script
-  cycle_script=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${display_file:-}" "${cycle_script:-}" "${sort_state_file:-}" "${footer_script:-}"' EXIT
-
-  # Footer script - reads sort state and outputs footer text
-  local footer_script
-  footer_script=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${display_file:-}" "${cycle_script:-}" "${sort_state_file:-}" "${footer_script:-}"' EXIT
-
-  cat >"$footer_script" <<FOOTER_EOF
-#!/usr/bin/env bash
-STATE_FILE="$sort_state_file"
-sort_order=("time" "directory")
-idx=\$(cat "\$STATE_FILE")
-sort_field="\${sort_order[\$idx]}"
-echo "CTRL-S: cycle sort (current: \$sort_field) | ↑/↓: navigate | Enter: resume | Ctrl-o: new window | ?: toggle preview"
-FOOTER_EOF
-  chmod +x "$footer_script"
-
-  cat >"$cycle_script" <<CYCLE_EOF
-#!/usr/bin/env bash
-STATE_FILE="$sort_state_file"
-DISPLAY_FILE="$display_file"
-
-idx=\$(cat "\$STATE_FILE")
-idx=\$(( (idx + 1) % 2 ))
-echo "\$idx" > "\$STATE_FILE"
-
-if [[ "\$idx" == "0" ]]; then
-    sort -t\$'\\t' -k3,3rn "\$DISPLAY_FILE"
-else
-    sort -t\$'\\t' -k4,4 -k3,3rn "\$DISPLAY_FILE"
-fi
-CYCLE_EOF
-  chmod +x "$cycle_script"
+  # Sort cycling scripts (standalone, no heredoc escaping needed)
+  local cycle_script="${SCRIPT_DIR}/scripts/sort_cycle.sh"
+  local footer_script="${SCRIPT_DIR}/scripts/sort_footer.sh"
 
   # Initial sort (array preserves literal tab from $'\t')
   local initial_sort_cmd=(sort -t$'\t')
@@ -357,7 +324,7 @@ CYCLE_EOF
     --prompt="Select session: " \
     --footer "CTRL-S: cycle sort (current: $SORT_BY) | ↑/↓: navigate | Enter: resume | Ctrl-o: new window | ?: toggle preview" \
     --bind "?:toggle-preview" \
-    --bind "ctrl-s:reload(bash '${cycle_script}')+transform-footer(bash '${footer_script}')" \
+    --bind "ctrl-s:reload(bash '${cycle_script}' '${sort_state_file}' '${display_file}')+transform-footer(bash '${footer_script}' '${sort_state_file}')" \
     "${fzf_flags[@]}" \
     2>/dev/null) || true
 
