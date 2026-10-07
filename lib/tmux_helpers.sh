@@ -58,18 +58,31 @@ build_session_args() {
 	echo "$args"
 }
 
-# Build the tmux display-popup command for the session picker.
-# Args: extra_args (optional, e.g. "--projects")
-# Echoes the full tmux command string (bind-key ... run-shell ...)
-build_popup_binding() {
-	local extra="${1:-}"
+# Bind a tmux key to open the session picker popup.
+# Resolves all options at load time (not via #{...} format strings)
+# so values are concrete when the binding is registered.
+# Args: key  extra_args (optional, e.g. "--projects")
+bind_popup_key() {
+	local key="$1"
+	local extra="${2:-}"
 	local script="$CURRENT_DIR/bin/opencode_sessions.sh"
-	local border_opt="#{?@opencode-sessions-popup-border,-B,}"
-	local width="#{@opencode-sessions-popup-width}"
-	local height="#{@opencode-sessions-popup-height}"
 	local args
 
 	args=$(build_session_args "$extra")
 
-	echo "run-shell -b \"tmux display-popup ${border_opt} -w '${width}' -h '${height}' -xC -yC -E \\\"${script}${args}\\\"\""
+	# Resolve popup dimensions and border at load time
+	local width height border_flag
+	width=$(get_tmux_option @opencode-sessions-popup-width "80%")
+	height=$(get_tmux_option @opencode-sessions-popup-height "80%")
+	border_flag=""
+	if [[ "$(get_tmux_option @opencode-sessions-popup-border false)" == "true" ]]; then
+		border_flag="-B"
+	fi
+
+	# Build the display-popup command that runs inside the popup
+	local popup_cmd="${script}${args}"
+
+	# Register the key binding via tmux bind-key
+	tmux bind-key -n "$key" run-shell -b \
+		"tmux display-popup ${border_flag} -w '${width}' -h '${height}' -xC -yC -E \"${popup_cmd}\""
 }
