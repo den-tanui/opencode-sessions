@@ -171,7 +171,7 @@ while [[ $# -gt 0 ]]; do
     echo "  --projects      Browse projects instead of sessions"
     echo "  --tmux [OPTS]   Open fzf in a floating tmux popup (requires tmux 3.3+)"
     echo "                  OPTS: e.g. center,80%,50% or right,40% (default: center,80%)"
-    echo "  --ansi          Enable ANSI colored output (status indicators, headers, preview)"
+    echo "  --ansi          Force ANSI colored output (auto-detected by default)"
     echo "  --fzf-opts OPTS Custom fzf options (overrides default)"
     echo "  --prefix STR    Tmux session name prefix"
     echo "  --new-window    Open session in new window without switching tmux"
@@ -186,13 +186,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ─── Re-evaluate ANSI after arg parsing ──────────────────────────────────────
-# --ansi flag or --ansi in --fzf-opts enables colored output
+# Enable colored output if: --ansi flag, --ansi in --fzf-opts, or terminal
+# advertises true color / 256 color support via COLORTERM or TERM.
 if [[ "$ANSI_FLAG" == "true" ]] || echo "$FZF_OPTS" | grep -qw -- '--ansi'; then
   USE_ANSI=true
-  # Ensure --ansi is in FZF_OPTS for fzf itself
-  echo "$FZF_OPTS" | grep -qw -- '--ansi' || FZF_OPTS="--ansi $FZF_OPTS"
+elif [[ "$COLORTERM" == truecolor || "$COLORTERM" == 24bit ]] \
+  || [[ "$TERM" == *-256color || "$TERM" == *color ]]; then
+  USE_ANSI=true
 else
   USE_ANSI=false
+fi
+# Ensure --ansi is in FZF_OPTS for fzf itself when colors are enabled
+if [[ "$USE_ANSI" == "true" ]]; then
+  echo "$FZF_OPTS" | grep -qw -- '--ansi' || FZF_OPTS="--ansi $FZF_OPTS"
 fi
 source "${SCRIPT_DIR}/lib/colors.sh"
 
