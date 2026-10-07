@@ -336,16 +336,16 @@ fi
 CYCLE_EOF
   chmod +x "$cycle_script"
 
-  # Initial sort
-  local initial_sort_cmd
+  # Initial sort (array preserves literal tab from $'\t')
+  local initial_sort_cmd=(sort -t$'\t')
   case "$SORT_BY" in
-  directory) initial_sort_cmd="sort -t$'\t' -k4,4 -k3,3rn" ;;
-  *) initial_sort_cmd="sort -t$'\t' -k3,3rn" ;;
+  directory) initial_sort_cmd+=(-k4,4 -k3,3rn) ;;
+  *) initial_sort_cmd+=(-k3,3rn) ;;
   esac
 
   # Run fzf with footer and ctrl-s sort cycling
   local selected
-  selected=$($initial_sort_cmd <"$display_file" | fzf \
+  selected=$("${initial_sort_cmd[@]}" <"$display_file" | fzf \
     $FZF_OPTS \
     $FZF_TMUX_OPTS \
     --expect=ctrl-o \
