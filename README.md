@@ -114,7 +114,8 @@ All options have sensible defaults — you only need to set the ones you want to
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `@opencode-sessions-key` | `o` | Tmux key binding (e.g. `o`, `M-o`, `C-o`) |
+| `@opencode-sessions-key` | `o` | Tmux key binding for sessions view (e.g. `o`, `M-o`, `C-o`) |
+| `@opencode-sessions-projects-key` | `O` | Tmux key binding for projects view (e.g. `O`, `M-O`, `C-O`) |
 | `@opencode-sessions-days` | `30` | Show sessions from last N days |
 | `@opencode-sessions-sort` | `time` | Initial sort: `time` or `directory` |
 | `@opencode-sessions-prefix` | `false` | Tmux session name prefix (or `false` for none) |
@@ -128,6 +129,7 @@ Example `.tmux.conf`:
 
 ```tmux
 set -g @opencode-sessions-key "M-o"
+set -g @opencode-sessions-projects-key "M-O"
 set -g @opencode-sessions-days "30"
 set -g @opencode-sessions-popup-width "90%"
 # If installing manually (not via TPM), add:
