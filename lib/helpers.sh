@@ -9,18 +9,23 @@ get_total_count() {
 
 # Run a scalar SQL query safely with error handling
 # Args: db_path sql
-# Escapes single quotes in the SQL string before execution
+# Callers must escape single quotes in interpolated values themselves.
 db_scalar() {
 	local db_path="$1"
 	local sql="$2"
-	# Escape single quotes
-	sql="${sql//\'/\'\'}"
 	local result
 	result=$(sqlite3 "$db_path" "$sql" 2>&1) || {
 		echo -e "${RED:-}DB error: ${result}${RESET:-}" >&2
 		return 1
 	}
 	echo "$result"
+}
+
+# Escape single quotes in a value for safe SQL interpolation.
+# Usage: val=$(sql_escape "$raw"); db_scalar "$db" "SELECT ... WHERE id = '${val}'"
+sql_escape() {
+	local val="$1"
+	echo "${val//\'/\'\'}"
 }
 
 # Derive repo name from directory
