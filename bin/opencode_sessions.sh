@@ -45,7 +45,7 @@ get_current_tmux_session() {
   fi
 }
 
-DAYS_FILTER=7
+DAYS_FILTER=14
 SORT_BY="time"
 FZF_OPTS="--height 100% --layout=reverse --border"
 
