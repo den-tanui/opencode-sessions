@@ -119,7 +119,7 @@ All options have sensible defaults — you only need to set the ones you want to
 | `@opencode-sessions-days` | `30` | Show sessions from last N days |
 | `@opencode-sessions-sort` | `time` | Initial sort: `time` or `directory` |
 | `@opencode-sessions-prefix` | `false` | Tmux session name prefix (or `false` for none) |
-| `@opencode-sessions-fzf-opts` | `--height 80% --layout=reverse` | Custom fzf options (add `--ansi` for colored output) |
+| `@opencode-sessions-fzf-opts` | `--layout=reverse` | Custom fzf options (add `--ansi` for colored output) |
 | `@opencode-sessions-popup-width` | `80%` | Tmux popup width |
 | `@opencode-sessions-popup-height` | `80%` | Tmux popup height |
 | `@opencode-sessions-popup-border` | `false` | Show border around tmux popup (`true`/`false`) |

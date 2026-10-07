@@ -37,7 +37,7 @@ build_session_args() {
 
 	args+=" --days $(get_tmux_option @opencode-sessions-days 30)"
 	args+=" --sort $(get_tmux_option @opencode-sessions-sort time)"
-	args+=" --fzf-opts '$(get_tmux_option @opencode-sessions-fzf-opts '--height 80% --layout=reverse')'"
+	args+=" --fzf-opts '$(get_tmux_option @opencode-sessions-fzf-opts '--layout=reverse')'"
 
 	local prefix
 	prefix=$(get_tmux_option @opencode-sessions-prefix false)
