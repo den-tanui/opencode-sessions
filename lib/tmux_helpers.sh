@@ -16,16 +16,27 @@ get_tmux_option() {
 	fi
 }
 
-# Set a tmux option only if it is not already set by the user.
+# Set a tmux option only if the user hasn't set it AND the current value
+# differs from what this plugin version's default should be. This allows
+# updating defaults across plugin versions without overwriting user config.
 # Args: option_name default_value
 set_tmux_default() {
 	local option="$1"
 	local default="$2"
 	local current
 	current=$(tmux show-option -gqv "$option" 2>/dev/null)
+	# Only set if unset — user config always wins
 	if [[ -z "$current" ]]; then
 		tmux set -g "$option" "$default"
 	fi
+}
+
+# Unbind a key from both root and prefix tables to clear stale bindings.
+# Args: key
+unbind_key_all() {
+	local key="$1"
+	tmux unbind-key -n "$key" 2>/dev/null
+	tmux unbind-key "$key" 2>/dev/null
 }
 
 # Build the CLI args string for opencode_sessions.sh from tmux options.
@@ -85,6 +96,8 @@ build_session_args() {
 # Bind a tmux key to open the session picker popup.
 # Resolves all options at load time (not via #{...} format strings)
 # so values are concrete when the binding is registered.
+# Plain keys (e.g. "o", "p") use the prefix table (require leader key).
+# Modifier keys (e.g. "M-o", "C-p") use the root table (no prefix).
 # Args: key  extra_args (optional, e.g. "--projects")
 bind_popup_key() {
 	local key="$1"
@@ -106,9 +119,11 @@ bind_popup_key() {
 	# Build the display-popup command that runs inside the popup
 	local popup_cmd="${script}${args}"
 
+	# Clear any stale bindings for this key from both tables
+	unbind_key_all "$key"
+
 	# Register the key binding via tmux bind-key
-	# Use prefix table (requires leader key) for plain keys like "o", "p".
-	# Use root table (no prefix, -n) for modifier keys like "M-o", "C-p".
+	# -n = root table (no prefix); without -n = prefix table (requires prefix)
 	local bind_args=()
 	if [[ "$key" =~ ^[MCS]- ]]; then
 		bind_args+=(-n)
