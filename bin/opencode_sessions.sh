@@ -539,14 +539,9 @@ handle_project() {
       if is_in_tmux; then
         local session_name
         session_name=$(derive_repo_name "$worktree")
-        if tmux has-session -t "$session_name" 2>/dev/null; then
-          tmux new-window -t "$session_name" -c "$worktree" -n "opencode" "exec opencode"
-        else
-          tmux new-session -d -s "$session_name" -c "$worktree" "exec opencode"
-          tmux switch-client -t "$session_name"
-        fi
+        run_opencode_tmux "$worktree" "$session_name" false
       else
-        cd "$worktree" && exec opencode
+        run_opencode_direct "$worktree"
       fi
     else
       echo -e "${RED}Project worktree not found or does not exist${RESET}"
@@ -619,7 +614,53 @@ handle_project() {
   handle_session "$session_id" "$nw"
 }
 
-# ─── Handle tmux session creation/switching ─────────────────────────────────
+# ─── Launch opencode ──────────────────────────────────────────────────────────
+
+# Run opencode directly in the current TTY
+# Args: directory [session_id]
+run_opencode_direct() {
+  local dir="$1"
+  local sid="${2:-}"
+  echo -e "${DIM}Running opencode directly (no tmux)${RESET}"
+  cd "$dir" || { echo -e "${RED}Cannot cd to ${dir}${RESET}" >&2; exit 1; }
+  if [[ -n "$sid" ]]; then
+    exec opencode -s "$sid"
+  else
+    exec opencode
+  fi
+}
+
+# Run opencode inside tmux (create/switch session or window)
+# Args: directory session_name is_new_window [session_id]
+run_opencode_tmux() {
+  local dir="$1"
+  local session_name="$2"
+  local is_new_window="${3:-false}"
+  local sid="${4:-}"
+
+  local opencode_cmd="opencode"
+  [[ -n "$sid" ]] && opencode_cmd="opencode -s ${sid}"
+
+  if [[ "$is_new_window" == "true" ]]; then
+    # Create new window in current tmux session (don't switch)
+    local current_session
+    current_session=$(get_current_tmux_session)
+    echo -e "${DIM}Creating new window in tmux session: ${current_session}${RESET}"
+    tmux new-window -t "$current_session" -c "$dir" -n "opencode" "exec ${opencode_cmd}"
+  elif tmux has-session -t "$session_name" 2>/dev/null; then
+    # Session exists - create new window
+    echo -e "${DIM}Creating new window in existing tmux session: ${session_name}${RESET}"
+    tmux new-window -t "$session_name" -c "$dir" -n "opencode" "exec ${opencode_cmd}"
+    tmux switch-client -t "$session_name"
+  else
+    # Create new tmux session
+    echo -e "${DIM}Creating new tmux session: ${session_name}${RESET}"
+    tmux new-session -d -s "$session_name" -c "$dir" "exec ${opencode_cmd}"
+    tmux switch-client -t "$session_name"
+  fi
+}
+
+# ─── Handle session selection (resume or start) ───────────────────────────────
 
 handle_session() {
   local session_id="$1"
@@ -639,6 +680,14 @@ handle_session() {
     exit 1
   fi
 
+  echo -e "${GREEN}Resuming session: ${session_id}${RESET}"
+  echo -e "${DIM}Directory: ${directory}${RESET}"
+
+  if ! is_in_tmux; then
+    run_opencode_direct "$directory" "$session_id"
+    return
+  fi
+
   # Derive tmux session name from directory
   local session_name
   session_name=$(derive_repo_name "$directory")
@@ -648,35 +697,8 @@ handle_session() {
     session_name="${PREFIX}${session_name}"
   fi
 
-  echo -e "${GREEN}Resuming session: ${session_id}${RESET}"
-  echo -e "${DIM}Directory: ${directory}${RESET}"
   echo -e "${DIM}Tmux session: ${session_name}${RESET}"
-
-  # If new-window mode and not in tmux, fall back to cd + exec
-  if [[ "$is_new_window" == "true" ]] && ! is_in_tmux; then
-    echo -e "${DIM}Not in tmux - running opencode directly in directory${RESET}"
-    cd "$directory" && exec opencode -s "$session_id"
-  fi
-
-  # Handle based on new-window mode and tmux availability
-  if [[ "$is_new_window" == "true" ]] && is_in_tmux; then
-    # Create new window in current tmux session (don't switch)
-    local current_session
-    current_session=$(get_current_tmux_session)
-    echo -e "${DIM}Creating new window in current tmux session: ${current_session}${RESET}"
-    tmux new-window -t "$current_session" -c "$directory" -n "opencode" "exec opencode -s ${session_id}"
-    # Do NOT switch - stay in current window
-  elif tmux has-session -t "$session_name" 2>/dev/null; then
-    # Session exists - create new window
-    echo -e "${DIM}Creating new window in existing tmux session${RESET}"
-    tmux new-window -t "$session_name" -c "$directory" -n "opencode" "exec opencode -s ${session_id}"
-    tmux switch-client -t "$session_name"
-  else
-    # Create new tmux session
-    echo -e "${DIM}Creating new tmux session${RESET}"
-    tmux new-session -d -s "$session_name" -c "$directory" "exec opencode -s ${session_id}"
-    tmux switch-client -t "$session_name"
-  fi
+  run_opencode_tmux "$directory" "$session_name" "$is_new_window" "$session_id"
 }
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
