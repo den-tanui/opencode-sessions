@@ -14,6 +14,10 @@ query_all_sessions() {
 	local dir_filter="${4:-}"
 	local project_filter="${5:-}"
 
+	# Escape single quotes for safe SQL interpolation
+	local dir_filter_esc="${dir_filter//\'/\'\'}"
+	local project_filter_esc="${project_filter//\'/\'\'}"
+
 	local time_threshold
 	if [[ "$show_all" == "true" ]]; then
 		time_threshold=0
@@ -106,8 +110,8 @@ LEFT JOIN has_error he ON he.session_id = s.id
 LEFT JOIN child_count cc ON cc.parent_id = s.id
 WHERE s.time_archived IS NULL AND s.parent_id IS NULL
 AND s.time_updated >= $time_threshold
-$(if [[ -n "$dir_filter" ]]; then echo "AND s.directory = '${dir_filter}'"; fi)
-$(if [[ -n "$project_filter" ]]; then echo "AND s.project_id = '${project_filter}'"; fi);
+$(if [[ -n "$dir_filter_esc" ]]; then echo "AND s.directory = '${dir_filter_esc}'"; fi)
+$(if [[ -n "$project_filter_esc" ]]; then echo "AND s.project_id = '${project_filter_esc}'"; fi);
 "
 }
 
