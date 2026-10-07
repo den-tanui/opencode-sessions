@@ -33,15 +33,6 @@ source "${SCRIPT_DIR}/lib/format.sh"
 DB_PATH="${HOME}/.local/share/opencode/opencode.db"
 PREVIEW_SCRIPT="${SCRIPT_DIR}/scripts/preview.sh"
 
-# Read tmux options with fallbacks
-get_tmux_option() {
-  local option="$1"
-  local default="$2"
-  local value
-  value=$(tmux show-option -gqv "$option" 2>/dev/null)
-  echo "${value:-$default}"
-}
-
 # Check if running inside tmux
 is_in_tmux() {
   [[ -n "${TMUX:-}" ]]
@@ -54,11 +45,9 @@ get_current_tmux_session() {
   fi
 }
 
-DAYS_FILTER=$(get_tmux_option "@opencode-sessions-days" "7")
-SORT_BY=$(get_tmux_option "@opencode-sessions-sort" "time")
-
-# FZF options - passed as single string of options
-FZF_OPTS=$(get_tmux_option "@opencode-sessions-fzf-opts" "--height 100% --ansi --layout=reverse --border")
+DAYS_FILTER=7
+SORT_BY="time"
+FZF_OPTS="--height 100% --ansi --layout=reverse --border"
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 MODE="interactive"
@@ -66,6 +55,11 @@ FILTER_STATUS=""
 SHOW_ALL=false
 DIR_FILTER=""
 NEW_WINDOW_MODE=false
+PROJECTS_MODE=false
+PROJECT_FILTER=""
+TMUX_POPUP=false
+TMUX_OPTS_ARG=""
+PREFIX=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -105,6 +99,41 @@ while [[ $# -gt 0 ]]; do
     NEW_WINDOW_MODE=true
     shift
     ;;
+  --projects)
+    PROJECTS_MODE=true
+    shift
+    ;;
+  --tmux)
+    TMUX_POPUP=true
+    # Optional dimension argument: --tmux=center,80%,50% or --tmux center,80%,50%
+    if [[ $# -gt 1 ]] && [[ "$2" != --* ]]; then
+      TMUX_OPTS_ARG="$2"
+      shift 2
+    else
+      shift
+    fi
+    ;;
+  --tmux=*)
+    TMUX_POPUP=true
+    TMUX_OPTS_ARG="${1#--tmux=}"
+    shift
+    ;;
+  --fzf-opts)
+    FZF_OPTS="$2"
+    shift 2
+    ;;
+  --fzf-opts=*)
+    FZF_OPTS="${1#--fzf-opts=}"
+    shift
+    ;;
+  --prefix)
+    PREFIX="$2"
+    shift 2
+    ;;
+  --prefix=*)
+    PREFIX="${1#--prefix=}"
+    shift
+    ;;
   -h | --help)
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -113,10 +142,15 @@ while [[ $# -gt 0 ]]; do
     echo "  --copy          Copy selected session ID to clipboard"
     echo "  --multi         Multi-select mode (TAB to mark)"
     echo "  --filter STATUS Filter by: working, needs-input, error, idle"
-    echo "  --sort FIELD    Initial sort: time (default), directory, status"
+    echo "  --sort FIELD    Initial sort: time (default), directory"
     echo "  --dir DIR       Filter by specific directory (exact match)"
     echo "  --days N        Show sessions from last N days (default: 14)"
     echo "  --all           Show all sessions regardless of age"
+    echo "  --projects      Browse projects instead of sessions"
+    echo "  --tmux [OPTS]   Open fzf in a floating tmux popup (requires tmux 3.3+)"
+    echo "                  OPTS: e.g. center,80%,50% or right,40% (default: center,80%)"
+    echo "  --fzf-opts OPTS Custom fzf options (overrides default)"
+    echo "  --prefix STR    Tmux session name prefix"
     echo "  --new-window    Open session in new window without switching tmux"
     echo "  -h, --help      Show this help"
     exit 0
@@ -150,6 +184,23 @@ if [[ ! -f "$PREVIEW_SCRIPT" ]]; then
   exit 1
 fi
 
+# ─── Tmux popup setup ─────────────────────────────────────────────────────────
+# When --tmux is passed, strip --height from FZF_OPTS (incompatible with --tmux)
+# and add the --tmux flag to all fzf invocations.
+# Dimension options can come from: --tmux=OPTS arg, or @opencode-sessions-tmux-opts tmux option.
+FZF_TMUX_OPTS=""
+if [[ "$TMUX_POPUP" == "true" ]]; then
+  if ! is_in_tmux; then
+    echo -e "${YELLOW}Warning: --tmux requires running inside tmux, ignoring${RESET}" >&2
+    TMUX_POPUP=false
+  else
+    # Strip --height (and its value) from FZF_OPTS — incompatible with --tmux popup
+    FZF_OPTS=$(echo "$FZF_OPTS" | sed -E 's/--height[= ]+[0-9]+%?//g')
+    # Build --tmux option string: CLI arg takes priority, then hardcoded default
+    FZF_TMUX_OPTS="--tmux=${TMUX_OPTS_ARG:-center,80%}"
+  fi
+fi
+
 # ─── List mode ────────────────────────────────────────────────────────────────
 
 run_list() {
@@ -158,7 +209,7 @@ run_list() {
   local total_count=0
 
   # Count filtered sessions
-  filtered_count=$(build_session_data query_all_sessions "$FILTER_STATUS" | wc -l)
+  filtered_count=$(build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" "$DIR_FILTER" | wc -l)
 
   # Get total count if filtering
   if [[ "$SHOW_ALL" != "true" && "$DAYS_FILTER" -gt 0 ]]; then
@@ -171,7 +222,7 @@ run_list() {
   echo -e "${WHITE}$(printf '%-8s' 'Status') $(printf '%-10s' 'Updated') $(printf '%-20s' 'Repo') Session Title [Model]${RESET}"
   echo -e "${DIM}$(printf '%.0s─' {1..100})${RESET}"
 
-  build_session_data query_all_sessions "$FILTER_STATUS" | sort_data "$SORT_BY" | format_for_list | while IFS=$'\t' read -r line; do
+  build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" "$DIR_FILTER" | sort_data "$SORT_BY" | format_for_list | while IFS=$'\t' read -r line; do
     echo -e "$line"
   done
 }
@@ -184,9 +235,9 @@ run_interactive() {
   # Cache all session data
   local cache_file
   cache_file=$(mktemp)
-  trap 'rm -f "$cache_file"' EXIT
+  trap 'rm -f "${cache_file:-}"' EXIT
 
-  build_session_data query_all_sessions "$FILTER_STATUS" >"$cache_file"
+  build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" "$DIR_FILTER" >"$cache_file"
 
   if [[ ! -s "$cache_file" ]]; then
     echo -e "${YELLOW}No sessions found.${RESET}"
@@ -208,7 +259,7 @@ run_interactive() {
   # Sort the cached data (default: newest first)
   local sorted_file
   sorted_file=$(mktemp)
-  trap 'rm -f "$cache_file" "$sorted_file"' EXIT
+  trap 'rm -f "${cache_file:-}" "${sorted_file:-}"' EXIT
   sort_data "$SORT_BY" <"$cache_file" >"$sorted_file"
 
   local fzf_flags=()
@@ -222,29 +273,43 @@ run_interactive() {
   case "$SORT_BY" in
   time) echo "0" >"$sort_state_file" ;;
   directory) echo "1" >"$sort_state_file" ;;
-  status) echo "2" >"$sort_state_file" ;;
   *) echo "0" >"$sort_state_file" ;;
   esac
 
   # Cycle script for sort cycling in fzf
   local cycle_script
   cycle_script=$(mktemp)
-  trap 'rm -f "$cache_file" "$sorted_file" "$cycle_script" "$sort_state_file" "$cycle_cache"' EXIT
+  trap 'rm -f "${cache_file:-}" "${sorted_file:-}" "${cycle_script:-}" "${sort_state_file:-}" "${cycle_cache:-}"' EXIT
 
   # Copy cache data to a temp file that cycle script can read
   local cycle_cache
   cycle_cache=$(mktemp)
   cp "$cache_file" "$cycle_cache"
 
+  # Footer script - reads sort state and outputs footer text
+  local footer_script
+  footer_script=$(mktemp)
+  trap 'rm -f "${cache_file:-}" "${sorted_file:-}" "${cycle_script:-}" "${sort_state_file:-}" "${cycle_cache:-}" "${footer_script:-}"' EXIT
+
+  cat >"$footer_script" <<FOOTER_EOF
+#!/usr/bin/env bash
+STATE_FILE="$sort_state_file"
+sort_order=("time" "directory")
+idx=\$(cat "\$STATE_FILE")
+sort_field="\${sort_order[\$idx]}"
+echo "CTRL-S: cycle sort (current: \$sort_field) | ↑/↓: navigate | Enter: resume | Ctrl-o: new window | ?: toggle preview"
+FOOTER_EOF
+  chmod +x "$footer_script"
+
   cat >"$cycle_script" <<CYCLE_EOF
 #!/usr/bin/env bash
 CACHE_FILE="$cycle_cache"
 STATE_FILE="$sort_state_file"
 
-sort_order=("time" "directory" "status")
+sort_order=("time" "directory")
 
 idx=\$(cat "\$STATE_FILE")
-idx=\$(( (idx + 1) % 3 ))
+idx=\$(( (idx + 1) % 2 ))
 echo "\$idx" > "\$STATE_FILE"
 
 sort_field="\${sort_order[\$idx]}"
@@ -270,26 +335,10 @@ format_for_display() {
 sort_data() {
     case "\$1" in
         time) cat ;;
-        directory) sort -t\$'\\t' -k4,4 -k3,3 ;;
-        status)
-            while IFS=\$'\\t' read -r id status time_ago repo title model directory child_count; do
-                local prio
-                case "\$status" in
-                    working) prio=0 ;; 
-                    idle) prio=1 ;;    
-                    *) prio=2 ;;       
-                esac
-                printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "\$id" "\$prio" "\$time_ago" "\$repo" "\$title" "\$model" "\$directory" "\$child_count"
-            done | sort -t\$'\\t' -k2,2n -k3,3 | while IFS=\$'\\t' read -r id prio time_ago repo title model directory child_count; do
-                local actual_status
-                case "\$prio" in
-                    0) actual_status="working" ;;
-                    1) actual_status="idle" ;;
-                    *) actual_status="dead" ;;
-                esac
-                printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "\$id" "\$actual_status" "\$time_ago" "\$repo" "\$title" "\$model" "\$directory" "\$child_count"
-            done
-            ;;
+        directory) awk -F'\\t' '
+            { if (\$9 > max[\$4]) max[\$4] = \$9; lines[NR] = \$0; repos[NR] = \$4 }
+            END { for (i = 1; i <= NR; i++) print max[repos[i]] "\\t" lines[i] }
+        ' | sort -t'\\t' -k1,1rn -k10,10rn | cut -f2- ;;
     esac
 }
 
@@ -301,6 +350,7 @@ CYCLE_EOF
   local selected
   selected=$(format_for_display <"$sorted_file" | fzf \
     $FZF_OPTS \
+    $FZF_TMUX_OPTS \
     --expect=ctrl-o \
     --with-nth 2.. \
     --border-label " OpenCode Sessions " \
@@ -308,9 +358,9 @@ CYCLE_EOF
     --preview-window "right:60%,border-left" \
     --delimiter '\t' \
     --prompt="Select session: " \
-    --footer "Alt-S: cycle sort (current: $SORT_BY) | ↑/↓: navigate | Enter: resume | Ctrl-o: new window | ?: toggle preview" \
+    --footer "CTRL-S: cycle sort (current: $SORT_BY) | ↑/↓: navigate | Enter: resume | Ctrl-o: new window | ?: toggle preview" \
     --bind "?:toggle-preview" \
-    --bind "alt-s:reload(bash '${cycle_script}')" \
+    --bind "ctrl-s:reload(bash '${cycle_script}')+transform-footer(bash '${footer_script}')" \
     "${fzf_flags[@]}" \
     2>/dev/null) || true
 
@@ -380,6 +430,242 @@ CYCLE_EOF
   fi
 }
 
+# ─── Projects list mode ──────────────────────────────────────────────────────
+
+run_projects_list() {
+  local filtered_count=0
+
+  filtered_count=$(build_project_data query_projects "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" | wc -l)
+
+  echo -e "${WHITE}$(printf '%-8s' 'Status') $(printf '%-10s' 'Updated') $(printf '%-20s' 'Project') (Sessions) [Model]${RESET}"
+  echo -e "${DIM}$(printf '%.0s─' {1..100})${RESET}"
+
+  build_project_data query_projects "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" | sort -t$'\t' -k8,8rn | format_projects_for_list | while IFS=$'\t' read -r line; do
+    echo -e "$line"
+  done
+}
+
+# ─── Projects interactive fzf mode ───────────────────────────────────────────
+
+run_projects_interactive() {
+  echo -e "${CYAN}Loading projects...${RESET}" >&2
+
+  local cache_file
+  cache_file=$(mktemp)
+  trap 'rm -f "${cache_file:-}"' EXIT
+
+  build_project_data query_projects "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" >"$cache_file"
+
+  if [[ ! -s "$cache_file" ]]; then
+    echo -e "${YELLOW}No projects found.${RESET}"
+    exit 0
+  fi
+
+  local sorted_file
+  sorted_file=$(mktemp)
+  trap 'rm -f "${cache_file:-}" "${sorted_file:-}"' EXIT
+  sort -t$'\t' -k8,8rn <"$cache_file" >"$sorted_file"
+
+  local fzf_flags=()
+  if [[ "$MODE" == "multi" ]]; then
+    fzf_flags+=(--multi)
+  fi
+
+  local project_preview_script="${SCRIPT_DIR}/scripts/preview-projects.sh"
+
+  local selected
+  selected=$(format_projects_for_display <"$sorted_file" | fzf \
+    $FZF_OPTS \
+    $FZF_TMUX_OPTS \
+    --expect=ctrl-o \
+    --with-nth 2.. \
+    --border-label " OpenCode Projects " \
+    --preview "bash '${project_preview_script}' {}" \
+    --preview-window "right:60%,border-left" \
+    --delimiter '\t' \
+    --prompt="Select project: " \
+    --footer "↑/↓: navigate | Enter: latest session | Ctrl-o: new window | ?: toggle preview" \
+    --bind "?:toggle-preview" \
+    "${fzf_flags[@]}" \
+    2>/dev/null) || true
+
+  if [[ -z "$selected" ]]; then
+    echo -e "${DIM}No project selected.${RESET}"
+    exit 0
+  fi
+
+  # Extract the key pressed (first line) and selection (remaining lines)
+  local key_pressed=""
+  local selection=""
+  if [[ -n "$selected" ]]; then
+    key_pressed=$(echo "$selected" | head -1)
+    selection=$(echo "$selected" | tail -n +2)
+  fi
+
+  local is_new_window="$NEW_WINDOW_MODE"
+  if [[ "$key_pressed" == "ctrl-o" ]]; then
+    is_new_window="true"
+  fi
+
+  selected="$selection"
+
+  if [[ -z "$selected" ]]; then
+    echo -e "${DIM}No project selected.${RESET}"
+    exit 0
+  fi
+
+  # Extract project ID(s)
+  local project_ids=()
+  while IFS= read -r line; do
+    local pid
+    pid=$(echo "$line" | cut -f1)
+    project_ids+=("$pid")
+  done <<<"$selected"
+
+  if [[ "$MODE" == "copy" ]]; then
+    local copy_text
+    copy_text=$(printf '%s\n' "${project_ids[@]}")
+    if command -v xclip &>/dev/null; then
+      echo "$copy_text" | xclip -selection clipboard
+    elif command -v pbcopy &>/dev/null; then
+      echo "$copy_text" | pbcopy
+    elif command -v wl-copy &>/dev/null; then
+      echo "$copy_text" | wl-copy
+    else
+      echo -e "${YELLOW}Project IDs:${RESET}"
+      echo "$copy_text"
+      echo -e "${DIM}(No clipboard tool found, copy manually)${RESET}"
+    fi
+    echo -e "${GREEN}Copied ${#project_ids[@]} project ID(s) to clipboard${RESET}"
+    exit 0
+  fi
+
+  # Resume the latest session for the selected project
+  if [[ "$is_new_window" == "true" ]] && [[ ${#project_ids[@]} -gt 1 ]]; then
+    for pid in "${project_ids[@]}"; do
+      handle_project "$pid" "true"
+    done
+  else
+    handle_project "${project_ids[0]}" "$is_new_window"
+  fi
+}
+
+# ─── Handle project selection (resume latest session) ────────────────────────
+
+handle_project() {
+  local project_id="$1"
+  local is_new_window="${2:-false}"
+
+  # Get project name for display
+  local project_name
+  project_name=$(sqlite3 "$DB_PATH" "SELECT name FROM project WHERE id = '${project_id}';")
+  [[ -z "$project_name" ]] && project_name="$project_id"
+
+  # Check if there are any active sessions for this project
+  local session_count
+  session_count=$(sqlite3 "$DB_PATH" "
+    SELECT COUNT(*) FROM session_v2
+    WHERE project_id = '${project_id}'
+      AND time_archived IS NULL AND parent_id IS NULL;
+  ")
+
+  if [[ "$session_count" -eq 0 ]]; then
+    echo -e "${YELLOW}No active sessions for project: ${project_name}${RESET}"
+    # Get the project worktree to start a new session
+    local worktree
+    worktree=$(sqlite3 "$DB_PATH" "SELECT worktree FROM project WHERE id = '${project_id}';")
+    if [[ -n "$worktree" ]] && [[ -d "$worktree" ]]; then
+      echo -e "${DIM}Starting opencode in ${worktree}${RESET}"
+      if is_in_tmux; then
+        local session_name
+        session_name=$(derive_repo_name "$worktree")
+        if tmux has-session -t "$session_name" 2>/dev/null; then
+          tmux new-window -t "$session_name" -c "$worktree" -n "opencode" "exec opencode"
+        else
+          tmux new-session -d -s "$session_name" -c "$worktree" "exec opencode"
+          tmux switch-client -t "$session_name"
+        fi
+      else
+        cd "$worktree" && exec opencode
+      fi
+    else
+      echo -e "${RED}Project worktree not found or does not exist${RESET}"
+      exit 1
+    fi
+    exit 0
+  fi
+
+  # If only one session, resume it directly
+  if [[ "$session_count" -eq 1 ]]; then
+    local session_id
+    session_id=$(sqlite3 "$DB_PATH" "
+      SELECT id FROM session_v2
+      WHERE project_id = '${project_id}'
+        AND time_archived IS NULL AND parent_id IS NULL
+      ORDER BY time_updated DESC LIMIT 1;
+    ")
+    handle_session "$session_id" "$is_new_window"
+    return
+  fi
+
+  # Multiple sessions: launch session picker filtered by project
+  echo -e "${CYAN}Loading sessions for: ${project_name}${RESET}" >&2
+
+  local cache_file
+  cache_file=$(mktemp)
+  trap 'rm -f "${cache_file:-}"' EXIT
+
+  build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" 0 "true" "" "$project_id" >"$cache_file"
+
+  if [[ ! -s "$cache_file" ]]; then
+    echo -e "${YELLOW}No sessions found for project: ${project_name}${RESET}"
+    exit 0
+  fi
+
+  local sorted_file
+  sorted_file=$(mktemp)
+  trap 'rm -f "${cache_file:-}" "${sorted_file:-}"' EXIT
+  sort_data "$SORT_BY" <"$cache_file" >"$sorted_file"
+
+  local selected
+  selected=$(format_for_display <"$sorted_file" | fzf \
+    $FZF_OPTS \
+    $FZF_TMUX_OPTS \
+    --expect=ctrl-o \
+    --with-nth 2.. \
+    --border-label " ${project_name} Sessions " \
+    --preview "bash '${PREVIEW_SCRIPT}' {}" \
+    --preview-window "right:60%,border-left" \
+    --delimiter '\t' \
+    --prompt="Select session: " \
+    --footer "↑/↓: navigate | Enter: resume | Ctrl-o: new window | ?: toggle preview" \
+    --bind "?:toggle-preview" \
+    2>/dev/null) || true
+
+  if [[ -z "$selected" ]]; then
+    echo -e "${DIM}No session selected.${RESET}"
+    exit 0
+  fi
+
+  # Extract key and selection
+  local key_pressed=""
+  local selection=""
+  key_pressed=$(echo "$selected" | head -1)
+  selection=$(echo "$selected" | tail -n +2)
+
+  local nw="$is_new_window"
+  [[ "$key_pressed" == "ctrl-o" ]] && nw="true"
+
+  if [[ -z "$selection" ]]; then
+    echo -e "${DIM}No session selected.${RESET}"
+    exit 0
+  fi
+
+  local session_id
+  session_id=$(echo "$selection" | cut -f1)
+  handle_session "$session_id" "$nw"
+}
+
 # ─── Handle tmux session creation/switching ─────────────────────────────────
 
 handle_session() {
@@ -404,11 +690,9 @@ handle_session() {
   local session_name
   session_name=$(derive_repo_name "$directory")
 
-  # Check if prefix should be used (default: false)
-  local use_prefix
-  use_prefix=$(get_tmux_option "@opencode-sessions-prefix" "false")
-  if [[ "$use_prefix" != "false" ]]; then
-    session_name="${use_prefix}${session_name}"
+  # Apply optional tmux session name prefix
+  if [[ -n "$PREFIX" && "$PREFIX" != "false" ]]; then
+    session_name="${PREFIX}${session_name}"
   fi
 
   echo -e "${GREEN}Resuming session: ${session_id}${RESET}"
@@ -446,9 +730,17 @@ handle_session() {
 
 case "$MODE" in
 list)
-  run_list
+  if [[ "$PROJECTS_MODE" == "true" ]]; then
+    run_projects_list
+  else
+    run_list
+  fi
   ;;
 interactive | copy | multi)
-  run_interactive
+  if [[ "$PROJECTS_MODE" == "true" ]]; then
+    run_projects_interactive
+  else
+    run_interactive
+  fi
   ;;
 esac

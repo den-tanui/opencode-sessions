@@ -6,9 +6,10 @@
 build_session_data() {
 	local query_func="$1"
 	local filter_status="$2"
+	shift 2
 
-	# Call the query function passed as argument
-	"$query_func" | while IFS='|' read -r id title directory time_updated time_created worktree project_name last_role last_completed has_rq has_cq has_err child_count model; do
+	# Call the query function passed as argument, forwarding remaining args
+	"$query_func" "$@" | while IFS='|' read -r id title directory time_updated time_created worktree project_name last_role last_completed has_rq has_cq has_err child_count model; do
 		[[ -z "$id" ]] && continue
 
 		local status
@@ -20,7 +21,7 @@ build_session_data() {
 		fi
 
 		local repo
-		repo=$(derive_repo_name "$directory")
+		repo=$(derive_repo_name "$worktree")
 
 		local time_ago
 		time_ago=$(relative_time "$time_updated")
@@ -34,6 +35,71 @@ build_session_data() {
 
 		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 			"$id" "$status" "$time_ago" "$repo" "$display_title" "$short_model" "$directory" "$child_count" "$time_updated"
+	done
+}
+
+# Build formatted project list from raw query results
+# Output: project_id\tstatus\ttime_ago\tname\tsession_count\tmodel\tworktree\tlatest_time
+build_project_data() {
+	local query_func="$1"
+	local filter_status="$2"
+	shift 2
+
+	"$query_func" "$@" | while IFS='|' read -r id name worktree session_count latest_time latest_role latest_completed model; do
+		[[ -z "$id" ]] && continue
+
+		local status
+		status=$(compute_status 0 0 0 "$latest_role" "$latest_completed")
+
+		# Apply filter
+		if [[ -n "$filter_status" && "$status" != "$filter_status" ]]; then
+			continue
+		fi
+
+		local repo
+		repo=$(derive_repo_name "$worktree")
+
+		local time_ago
+		time_ago=$(relative_time "$latest_time")
+
+		local short_model
+		short_model=$(shorten_model "$model")
+
+		local display_name="${name:-$repo}"
+		local full_name="${name:-$repo}"
+		display_name="${display_name:0:40}"
+		[[ ${#full_name} -gt 40 ]] && display_name="${display_name}…"
+
+		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+			"$id" "$status" "$time_ago" "$display_name" "$session_count" "$short_model" "$worktree" "$latest_time"
+	done
+}
+
+# Format project data for display in fzf
+# Input: tab-delimited project data
+# Output: id\tformatted_line
+format_projects_for_display() {
+	while IFS=$'\t' read -r id status time_ago name session_count model worktree latest_time; do
+		local icon
+		icon=$(status_icon "$status")
+		if [[ -n "$model" ]]; then
+			printf '%s\t%-8s %-10s %-20s (%s sessions) [%s]\n' "$id" "$icon" "$time_ago" "$name" "$session_count" "$model"
+		else
+			printf '%s\t%-8s %-10s %-20s (%s sessions)\n' "$id" "$icon" "$time_ago" "$name" "$session_count"
+		fi
+	done
+}
+
+# Format projects for list mode (no leading id tab)
+format_projects_for_list() {
+	while IFS=$'\t' read -r id status time_ago name session_count model worktree latest_time; do
+		local icon
+		icon=$(status_icon "$status")
+		if [[ -n "$model" ]]; then
+			printf '%-8s %-10s %-20s (%s sessions) [%s]\n' "$icon" "$time_ago" "$name" "$session_count" "$model"
+		else
+			printf '%-8s %-10s %-20s (%s sessions)\n' "$icon" "$time_ago" "$name" "$session_count"
+		fi
 	done
 }
 
@@ -52,7 +118,7 @@ build_directory_data() {
 		time_ago=$(relative_time "$time_updated")
 
 		local repo
-		repo=$(derive_repo_name "$directory")
+		repo=$(derive_repo_name "$worktree")
 
 		printf '%s\t%s\t%s\t%s\t(%d sessions)\t%s\n' \
 			"$directory" "$status" "$time_ago" "$repo" "$count" "$time_updated"
@@ -64,30 +130,12 @@ sort_by_time() {
 	sort -t$'\t' -k9,9rn
 }
 
-# Sort by directory, then by time descending
+# Sort by project (repo) grouped by most recent activity, then by time descending within each
 sort_by_directory() {
-	sort -t$'\t' -k4,4 -k9,9rn
-}
-
-# Sort by status priority, then by time descending
-sort_by_status() {
-	while IFS=$'\t' read -r id status time_ago repo title model directory child_count time_updated; do
-		local prio
-		case "$status" in
-		working) prio=0 ;;
-		idle) prio=1 ;;
-		*) prio=2 ;;
-		esac
-		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$prio" "$time_ago" "$repo" "$title" "$model" "$directory" "$child_count" "$time_updated"
-	done | sort -t$'\t' -k2,2n -k9,9rn | while IFS=$'\t' read -r id prio time_ago repo title model directory child_count time_updated; do
-		local actual_status
-		case "$prio" in
-		0) actual_status="working" ;;
-		1) actual_status="idle" ;;
-		*) actual_status="dead" ;;
-		esac
-		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$actual_status" "$time_ago" "$repo" "$title" "$model" "$directory" "$child_count" "$time_updated"
-	done
+	awk -F'\t' '
+		{ if ($9 > max[$4]) max[$4] = $9; lines[NR] = $0; repos[NR] = $4 }
+		END { for (i = 1; i <= NR; i++) print max[repos[i]] "\t" lines[i] }
+	' | sort -t$'\t' -k1,1rn -k10,10rn | cut -f2-
 }
 
 # Main sort dispatcher
@@ -95,7 +143,6 @@ sort_data() {
 	case "$1" in
 	time) sort_by_time ;;
 	directory) sort_by_directory ;;
-	status) sort_by_status ;;
 	*) sort_by_time ;;
 	esac
 }

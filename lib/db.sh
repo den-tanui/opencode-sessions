@@ -3,7 +3,7 @@
 # v2 schema: session_v2, session_message (no part table; content in JSON)
 
 # Query all sessions - returns pipe-delimited fields
-# Args: db_path days_filter show_all dir_filter
+# Args: db_path days_filter show_all dir_filter project_filter
 # Output: id|title|directory|time_updated|time_created|worktree|project_name|
 #         last_role|last_completed|has_running_question|has_child_question|
 #         has_error|child_count|model
@@ -12,6 +12,7 @@ query_all_sessions() {
 	local days_filter="${2:-14}"
 	local show_all="${3:-false}"
 	local dir_filter="${4:-}"
+	local project_filter="${5:-}"
 
 	local time_threshold
 	if [[ "$show_all" == "true" ]]; then
@@ -105,8 +106,69 @@ LEFT JOIN has_error he ON he.session_id = s.id
 LEFT JOIN child_count cc ON cc.parent_id = s.id
 WHERE s.time_archived IS NULL AND s.parent_id IS NULL
 AND s.time_updated >= $time_threshold
-$(if [[ -n "$dir_filter" ]]; then echo "AND s.directory = '${dir_filter}'"; fi);
+$(if [[ -n "$dir_filter" ]]; then echo "AND s.directory = '${dir_filter}'"; fi)
+$(if [[ -n "$project_filter" ]]; then echo "AND s.project_id = '${project_filter}'"; fi);
 "
+}
+
+# Query projects - returns pipe-delimited fields
+# Args: db_path days_filter show_all
+# Output: id|name|worktree|session_count|latest_time|latest_role|latest_completed|model
+query_projects() {
+	local db_path="${1:-${HOME}/.local/share/opencode/opencode.db}"
+	local days_filter="${2:-14}"
+	local show_all="${3:-false}"
+
+	local time_threshold
+	if [[ "$show_all" == "true" ]]; then
+		time_threshold=0
+	else
+		time_threshold=$((($(date +%s) - days_filter * 86400) * 1000))
+	fi
+
+	sqlite3 -separator '|' "$db_path" "
+  WITH active_sessions AS (
+    SELECT * FROM session_v2
+    WHERE time_archived IS NULL AND parent_id IS NULL
+      AND time_updated >= $time_threshold
+  ),
+  latest_session AS (
+    SELECT s1.project_id, s1.id as session_id, s1.time_updated
+    FROM active_sessions s1
+    INNER JOIN (
+      SELECT project_id, MAX(time_updated) as max_time
+      FROM active_sessions
+      GROUP BY project_id
+    ) s2 ON s1.project_id = s2.project_id AND s1.time_updated = s2.max_time
+  ),
+  latest_msg AS (
+    SELECT sm.session_id, sm.type as role,
+           json_extract(sm.data, '\$.time.completed') as completed
+    FROM session_message sm
+    INNER JOIN (
+      SELECT session_id, MAX(seq) as max_seq
+      FROM session_message
+      GROUP BY session_id
+    ) lm ON sm.session_id = lm.session_id AND sm.seq = lm.max_seq
+  ),
+  session_counts AS (
+    SELECT project_id, COUNT(*) as cnt
+    FROM active_sessions
+    GROUP BY project_id
+  )
+  SELECT p.id, p.name, p.worktree,
+         COALESCE(sc.cnt, 0) as session_count,
+         COALESCE(ls.time_updated, 0) as latest_time,
+         COALESCE(lm.role, '') as latest_role,
+         COALESCE(CAST(lm.completed AS TEXT), 'null') as latest_completed,
+         COALESCE(json_extract(s.model, '\$.id'), '') as model
+  FROM project p
+  JOIN session_counts sc ON sc.project_id = p.id
+  LEFT JOIN latest_session ls ON ls.project_id = p.id
+  LEFT JOIN latest_msg lm ON lm.session_id = ls.session_id
+  LEFT JOIN session_v2 s ON s.id = ls.session_id
+  ORDER BY latest_time DESC;
+	"
 }
 
 # Query directories - returns pipe-delimited fields
