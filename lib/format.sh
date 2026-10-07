@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Formatting and sorting functions for opencode-sessions
+# All per-line transformations use awk — zero subshell forks
 
 # Build formatted session list from raw query results
 # Output: session_id\tstatus\ttime_ago\trepo\ttitle\tmodel\tdirectory\tchild_count\ttime_updated
@@ -8,34 +9,57 @@ build_session_data() {
 	local filter_status="$2"
 	shift 2
 
-	# Call the query function passed as argument, forwarding remaining args
-	"$query_func" "$@" | while IFS='|' read -r id title directory time_updated time_created worktree project_name last_role last_completed has_rq has_cq has_err child_count model; do
-		[[ -z "$id" ]] && continue
+	local now
+	now=$(date +%s)
 
-		local status
-		status=$(compute_status "$has_rq" "$has_cq" "$has_err" "$last_role" "$last_completed")
-
-		# Apply filter
-		if [[ -n "$filter_status" && "$status" != "$filter_status" ]]; then
-			continue
-		fi
-
-		local repo
-		repo=$(derive_repo_name "$worktree")
-
-		local time_ago
-		time_ago=$(relative_time "$time_updated")
-
-		local short_model
-		short_model=$(shorten_model "$model")
-
-		# Truncate title to 60 chars
-		local display_title="${title:0:60}"
-		[[ ${#title} -gt 60 ]] && display_title="${display_title}…"
-
-		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-			"$id" "$status" "$time_ago" "$repo" "$display_title" "$short_model" "$directory" "$child_count" "$time_updated"
-	done
+	"$query_func" "$@" | awk -F'|' -v OFS='\t' -v now="$now" -v filter="$filter_status" '
+		function compute_status(has_rq, has_cq, has_err, role, completed) {
+			if (has_rq + 0 > 0 || has_cq + 0 > 0) return "needs-input"
+			if (has_err + 0 > 0) return "error"
+			if (role == "assistant" && completed == "null") return "working"
+			if (role == "user") return "working"
+			return "idle"
+		}
+		function derive_repo_name(dir) {
+			if (index(dir, "/.worktrees/") > 0)
+				sub("/.worktrees/.*", "", dir)
+			n = split(dir, parts, "/")
+			return parts[n]
+		}
+		function relative_time(ts,    diff) {
+			ts = int(ts / 1000)
+			diff = now - ts
+			if (diff < 60) return diff "s ago"
+			if (diff < 3600) return int(diff / 60) "m ago"
+			if (diff < 86400) return int(diff / 3600) "h ago"
+			if (diff < 604800) return int(diff / 86400) "d ago"
+			return strftime("%Y-%m-%d", ts)
+		}
+		function shorten_model(m) {
+			if (m == "") return ""
+			sub(".*/", "", m)
+			sub(/^claude-/, "", m)
+			sub(/^antigravity-/, "", m)
+			gsub(/codex-/, "", m)
+			sub(/-preview$/, "", m)
+			return m
+		}
+		function truncate(s, maxlen) {
+			if (length(s) > maxlen)
+				return substr(s, 1, maxlen) "…"
+			return s
+		}
+		NF == 0 { next }
+		{
+			status = compute_status($10, $11, $12, $8, $9)
+			if (filter != "" && status != filter) next
+			repo = derive_repo_name($6)
+			time_ago = relative_time($4)
+			short_model = shorten_model($14)
+			display_title = truncate($2, 60)
+			print $1, status, time_ago, repo, display_title, short_model, $3, $13, $4
+		}
+	'
 }
 
 # Build formatted project list from raw query results
@@ -45,84 +69,97 @@ build_project_data() {
 	local filter_status="$2"
 	shift 2
 
-	"$query_func" "$@" | while IFS='|' read -r id name worktree session_count latest_time latest_role latest_completed model; do
-		[[ -z "$id" ]] && continue
+	local now
+	now=$(date +%s)
 
-		local status
-		status=$(compute_status 0 0 0 "$latest_role" "$latest_completed")
-
-		# Apply filter
-		if [[ -n "$filter_status" && "$status" != "$filter_status" ]]; then
-			continue
-		fi
-
-		local repo
-		repo=$(derive_repo_name "$worktree")
-
-		local time_ago
-		time_ago=$(relative_time "$latest_time")
-
-		local short_model
-		short_model=$(shorten_model "$model")
-
-		local display_name="${name:-$repo}"
-		local full_name="${name:-$repo}"
-		display_name="${display_name:0:40}"
-		[[ ${#full_name} -gt 40 ]] && display_name="${display_name}…"
-
-		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-			"$id" "$status" "$time_ago" "$display_name" "$session_count" "$short_model" "$worktree" "$latest_time"
-	done
-}
-
-# Format project data for display in fzf
-# Input: tab-delimited project data
-# Output: id\tformatted_line
-format_projects_for_display() {
-	while IFS=$'\t' read -r id status time_ago name session_count model worktree latest_time; do
-		local icon
-		icon=$(status_icon "$status")
-		if [[ -n "$model" ]]; then
-			printf '%s\t%-8s %-10s %-20s (%s sessions) [%s]\n' "$id" "$icon" "$time_ago" "$name" "$session_count" "$model"
-		else
-			printf '%s\t%-8s %-10s %-20s (%s sessions)\n' "$id" "$icon" "$time_ago" "$name" "$session_count"
-		fi
-	done
-}
-
-# Format projects for list mode (no leading id tab)
-format_projects_for_list() {
-	while IFS=$'\t' read -r id status time_ago name session_count model worktree latest_time; do
-		local icon
-		icon=$(status_icon "$status")
-		if [[ -n "$model" ]]; then
-			printf '%-8s %-10s %-20s (%s sessions) [%s]\n' "$icon" "$time_ago" "$name" "$session_count" "$model"
-		else
-			printf '%-8s %-10s %-20s (%s sessions)\n' "$icon" "$time_ago" "$name" "$session_count"
-		fi
-	done
+	"$query_func" "$@" | awk -F'|' -v OFS='\t' -v now="$now" -v filter="$filter_status" '
+		function compute_status(role, completed) {
+			if (role == "assistant" && completed == "null") return "working"
+			if (role == "user") return "working"
+			return "idle"
+		}
+		function derive_repo_name(dir) {
+			if (index(dir, "/.worktrees/") > 0)
+				sub("/.worktrees/.*", "", dir)
+			n = split(dir, parts, "/")
+			return parts[n]
+			return parts[n]
+		}
+		function relative_time(ts,    diff) {
+			ts = int(ts / 1000)
+			diff = now - ts
+			if (diff < 60) return diff "s ago"
+			if (diff < 3600) return int(diff / 60) "m ago"
+			if (diff < 86400) return int(diff / 3600) "h ago"
+			if (diff < 604800) return int(diff / 86400) "d ago"
+			return strftime("%Y-%m-%d", ts)
+		}
+		function shorten_model(m) {
+			if (m == "") return ""
+			sub(".*/", "", m)
+			sub(/^claude-/, "", m)
+			sub(/^antigravity-/, "", m)
+			gsub(/codex-/, "", m)
+			sub(/-preview$/, "", m)
+			return m
+		}
+		function truncate(s, maxlen) {
+			if (length(s) > maxlen)
+				return substr(s, 1, maxlen) "…"
+			return s
+		}
+		NF == 0 { next }
+		{
+			status = compute_status($6, $7)
+			if (filter != "" && status != filter) next
+			repo = derive_repo_name($3)
+			time_ago = relative_time($5)
+			short_model = shorten_model($8)
+			display_name = ($2 != "") ? $2 : repo
+			display_name = truncate(display_name, 40)
+			print $1, status, time_ago, display_name, $4, short_model, $3, $5
+		}
+	'
 }
 
 # Build directory data for directory view
 # Output: directory\tstatus\ttime_ago\trepo\t(count sessions)\ttime_updated
 build_directory_data() {
 	local query_func="$1"
+	shift
 
-	"$query_func" | while IFS='|' read -r directory count time_updated role completed; do
-		[[ -z "$directory" ]] && continue
+	local now
+	now=$(date +%s)
 
-		local status
-		status=$(compute_status 0 0 0 "$role" "$completed")
-
-		local time_ago
-		time_ago=$(relative_time "$time_updated")
-
-		local repo
-		repo=$(derive_repo_name "$worktree")
-
-		printf '%s\t%s\t%s\t%s\t(%d sessions)\t%s\n' \
-			"$directory" "$status" "$time_ago" "$repo" "$count" "$time_updated"
-	done
+	"$query_func" "$@" | awk -F'|' -v OFS='\t' -v now="$now" '
+		function compute_status(role, completed) {
+			if (role == "assistant" && completed == "null") return "working"
+			if (role == "user") return "working"
+			return "idle"
+		}
+		function derive_repo_name(dir) {
+			if (index(dir, "/.worktrees/") > 0)
+				sub("/.worktrees/.*", "", dir)
+			n = split(dir, parts, "/")
+			return parts[n]
+		}
+		function relative_time(ts,    diff) {
+			ts = int(ts / 1000)
+			diff = now - ts
+			if (diff < 60) return diff "s ago"
+			if (diff < 3600) return int(diff / 60) "m ago"
+			if (diff < 86400) return int(diff / 3600) "h ago"
+			if (diff < 604800) return int(diff / 86400) "d ago"
+			return strftime("%Y-%m-%d", ts)
+		}
+		NF == 0 { next }
+		{
+			status = compute_status($4, $5)
+			time_ago = relative_time($3)
+			repo = derive_repo_name($1)
+			print $1, status, time_ago, repo, "(" $2 " sessions)", $3
+		}
+	'
 }
 
 # Sort by time_updated descending (newest first)
@@ -148,30 +185,114 @@ sort_data() {
 }
 
 # Format session data for display in fzf
-# Input: tab-delimited session data
+# Input: tab-delimited session data (9 fields)
 # Output: id\tdisplay_line\ttime_updated\trepo
 # Trailing sort keys allow ctrl-s to sort the file without reformatting
 format_for_display() {
-	while IFS=$'\t' read -r id status time_ago repo title model directory child_count time_updated; do
-		local icon
-		icon=$(status_icon "$status")
-		if [[ -n "$model" ]]; then
-			printf '%s\t%-8s %-10s %-20s %s [%s]\t%s\t%s\n' "$id" "$icon" "$time_ago" "$repo" "$title" "$model" "$time_updated" "$repo"
-		else
-			printf '%s\t%-8s %-10s %-20s %s\t%s\t%s\n' "$id" "$icon" "$time_ago" "$repo" "$title" "$time_updated" "$repo"
-		fi
-	done
+	awk -F'\t' -v OFS='\t' -v use_ansi="${USE_ANSI:-false}" '
+		function status_icon(status) {
+			if (use_ansi == "true") {
+				if (status == "needs-input") return "\033[0;33m🟡\033[0m"
+				else if (status == "error") return "\033[0;31m🔴\033[0m"
+				else if (status == "working") return "\033[0;32m🟢\033[0m"
+				else return "\033[2m⚪\033[0m"
+			} else {
+				if (status == "needs-input") return "?"
+				else if (status == "error") return "!"
+				else if (status == "working") return "*"
+				else return "."
+			}
+		}
+		NF == 0 { next }
+		{
+			icon = status_icon($2)
+			if ($6 != "")
+				printf "%s\t%-8s %-10s %-20s %s [%s]\t%s\t%s\n", $1, icon, $3, $4, $5, $6, $9, $4
+			else
+				printf "%s\t%-8s %-10s %-20s %s\t%s\t%s\n", $1, icon, $3, $4, $5, $9, $4
+		}
+	'
 }
 
-# Format for list mode (no leading id tab)
+# Format for list mode (no leading id tab, no trailing sort keys)
 format_for_list() {
-	while IFS=$'\t' read -r id status time_ago repo title model directory child_count time_updated; do
-		local icon
-		icon=$(status_icon "$status")
-		if [[ -n "$model" ]]; then
-			printf '%-8s %-10s %-20s %s [%s]\n' "$icon" "$time_ago" "$repo" "$title" "$model"
-		else
-			printf '%-8s %-10s %-20s %s\n' "$icon" "$time_ago" "$repo" "$title"
-		fi
-	done
+	awk -F'\t' -v use_ansi="${USE_ANSI:-false}" '
+		function status_icon(status) {
+			if (use_ansi == "true") {
+				if (status == "needs-input") return "\033[0;33m🟡\033[0m"
+				else if (status == "error") return "\033[0;31m🔴\033[0m"
+				else if (status == "working") return "\033[0;32m🟢\033[0m"
+				else return "\033[2m⚪\033[0m"
+			} else {
+				if (status == "needs-input") return "?"
+				else if (status == "error") return "!"
+				else if (status == "working") return "*"
+				else return "."
+			}
+		}
+		NF == 0 { next }
+		{
+			icon = status_icon($2)
+			if ($6 != "")
+				printf "%-8s %-10s %-20s %s [%s]\n", icon, $3, $4, $5, $6
+			else
+				printf "%-8s %-10s %-20s %s\n", icon, $3, $4, $5
+		}
+	'
+}
+
+# Format project data for display in fzf
+# Input: tab-delimited project data (8 fields)
+# Output: id\tformatted_line
+format_projects_for_display() {
+	awk -F'\t' -v use_ansi="${USE_ANSI:-false}" '
+		function status_icon(status) {
+			if (use_ansi == "true") {
+				if (status == "needs-input") return "\033[0;33m🟡\033[0m"
+				else if (status == "error") return "\033[0;31m🔴\033[0m"
+				else if (status == "working") return "\033[0;32m🟢\033[0m"
+				else return "\033[2m⚪\033[0m"
+			} else {
+				if (status == "needs-input") return "?"
+				else if (status == "error") return "!"
+				else if (status == "working") return "*"
+				else return "."
+			}
+		}
+		NF == 0 { next }
+		{
+			icon = status_icon($2)
+			if ($6 != "")
+				printf "%s\t%-8s %-10s %-20s (%s sessions) [%s]\n", $1, icon, $3, $4, $5, $6
+			else
+				printf "%s\t%-8s %-10s %-20s (%s sessions)\n", $1, icon, $3, $4, $5
+		}
+	'
+}
+
+# Format projects for list mode (no leading id tab)
+format_projects_for_list() {
+	awk -F'\t' -v use_ansi="${USE_ANSI:-false}" '
+		function status_icon(status) {
+			if (use_ansi == "true") {
+				if (status == "needs-input") return "\033[0;33m🟡\033[0m"
+				else if (status == "error") return "\033[0;31m🔴\033[0m"
+				else if (status == "working") return "\033[0;32m🟢\033[0m"
+				else return "\033[2m⚪\033[0m"
+			} else {
+				if (status == "needs-input") return "?"
+				else if (status == "error") return "!"
+				else if (status == "working") return "*"
+				else return "."
+			}
+		}
+		NF == 0 { next }
+		{
+			icon = status_icon($2)
+			if ($6 != "")
+				printf "%-8s %-10s %-20s (%s sessions) [%s]\n", icon, $3, $4, $5, $6
+			else
+				printf "%-8s %-10s %-20s (%s sessions)\n", icon, $3, $4, $5
+		}
+	'
 }
