@@ -235,6 +235,49 @@ if [[ "$TMUX_POPUP" == "true" ]]; then
   fi
 fi
 
+# ─── Shared helpers for fzf interactive modes ─────────────────────────────────
+
+# Parse fzf output: first line = key pressed, rest = selections
+# Sets global: FZF_KEY, FZF_SELECTION
+parse_fzf_output() {
+  FZF_KEY=""
+  FZF_SELECTION=""
+  if [[ -n "$1" ]]; then
+    FZF_KEY=$(echo "$1" | head -1)
+    FZF_SELECTION=$(echo "$1" | tail -n +2)
+  fi
+}
+
+# Extract IDs (tab-separated field 1) from selection lines
+# Returns array via global FZF_IDS
+extract_ids() {
+  FZF_IDS=()
+  while IFS= read -r line; do
+    FZF_IDS+=("$(echo "$line" | cut -f1)")
+  done <<<"$1"
+}
+
+# Copy IDs to clipboard, fallback to stdout
+# Args: ids...  label (e.g. "session" or "project")
+copy_ids_to_clipboard() {
+  local -n _ids=$1
+  local _label=$2
+  local copy_text
+  copy_text=$(printf '%s\n' "${_ids[@]}")
+  if command -v xclip &>/dev/null; then
+    echo "$copy_text" | xclip -selection clipboard
+  elif command -v pbcopy &>/dev/null; then
+    echo "$copy_text" | pbcopy
+  elif command -v wl-copy &>/dev/null; then
+    echo "$copy_text" | wl-copy
+  else
+    echo -e "${YELLOW}${_label^} IDs:${RESET}"
+    echo "$copy_text"
+    echo -e "${DIM}(No clipboard tool found, copy manually)${RESET}"
+  fi
+  echo -e "${GREEN}Copied ${#_ids[@]} ${_label} ID(s) to clipboard${RESET}"
+}
+
 # ─── List mode ────────────────────────────────────────────────────────────────
 
 run_list() {
@@ -347,57 +390,23 @@ run_interactive() {
     exit 0
   fi
 
-  # Extract the key pressed (first line) and selection (remaining lines)
-  local key_pressed=""
-  local selection=""
-  if [[ -n "$selected" ]]; then
-    key_pressed=$(echo "$selected" | head -1)
-    selection=$(echo "$selected" | tail -n +2)
-  fi
-
-  # Determine if this is new-window mode (Ctrl-o pressed or --new-window flag)
+  parse_fzf_output "$selected"
   local is_new_window="$NEW_WINDOW_MODE"
-  if [[ "$key_pressed" == "ctrl-o" ]]; then
-    is_new_window="true"
-  fi
+  [[ "$FZF_KEY" == "ctrl-o" ]] && is_new_window="true"
 
-  # Restore selected for further processing
-  selected="$selection"
-
-  # Handle empty selection after key extraction
-  if [[ -z "$selected" ]]; then
+  if [[ -z "$FZF_SELECTION" ]]; then
     echo -e "${DIM}No session selected.${RESET}"
     exit 0
   fi
 
-  # Extract session ID(s)
-  local session_ids=()
-  while IFS= read -r line; do
-    local sid
-    sid=$(echo "$line" | cut -f1)
-    session_ids+=("$sid")
-  done <<<"$selected"
+  extract_ids "$FZF_SELECTION"
+  local session_ids=("${FZF_IDS[@]}")
 
   if [[ "$MODE" == "copy" ]]; then
-    local copy_text
-    copy_text=$(printf '%s\n' "${session_ids[@]}")
-    if command -v xclip &>/dev/null; then
-      echo "$copy_text" | xclip -selection clipboard
-    elif command -v pbcopy &>/dev/null; then
-      echo "$copy_text" | pbcopy
-    elif command -v wl-copy &>/dev/null; then
-      echo "$copy_text" | wl-copy
-    else
-      echo -e "${YELLOW}Session IDs:${RESET}"
-      echo "$copy_text"
-      echo -e "${DIM}(No clipboard tool found, copy manually)${RESET}"
-    fi
-    echo -e "${GREEN}Copied ${#session_ids[@]} session ID(s) to clipboard${RESET}"
+    copy_ids_to_clipboard session_ids "session"
     exit 0
   fi
 
-  # Resume the first selected session with tmux session handling
-  # If new-window mode with multiple sessions, handle each
   if [[ "$is_new_window" == "true" ]] && [[ ${#session_ids[@]} -gt 1 ]]; then
     for sid in "${session_ids[@]}"; do
       handle_session "$sid" "true"
@@ -411,14 +420,16 @@ run_interactive() {
 # ─── Projects list mode ──────────────────────────────────────────────────────
 
 run_projects_list() {
-  local filtered_count=0
+  # Cache project data once — avoid querying DB twice
+  local cache_file
+  cache_file=$(reg_tmp)
 
-  filtered_count=$(build_project_data query_projects "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" | wc -l)
+  build_project_data query_projects "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" >"$cache_file"
 
   echo -e "${WHITE}$(printf '%-8s' 'Status') $(printf '%-10s' 'Updated') $(printf '%-20s' 'Project') (Sessions) [Model]${RESET}"
   echo -e "${DIM}$(printf '%.0s─' {1..100})${RESET}"
 
-  build_project_data query_projects "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" | sort -t$'\t' -k8,8rn | format_projects_for_list | while IFS=$'\t' read -r line; do
+  sort -t$'\t' -k8,8rn <"$cache_file" | format_projects_for_list | while IFS=$'\t' read -r line; do
     echo -e "$line"
   done
 }
@@ -470,49 +481,20 @@ run_projects_interactive() {
     exit 0
   fi
 
-  # Extract the key pressed (first line) and selection (remaining lines)
-  local key_pressed=""
-  local selection=""
-  if [[ -n "$selected" ]]; then
-    key_pressed=$(echo "$selected" | head -1)
-    selection=$(echo "$selected" | tail -n +2)
-  fi
-
+  parse_fzf_output "$selected"
   local is_new_window="$NEW_WINDOW_MODE"
-  if [[ "$key_pressed" == "ctrl-o" ]]; then
-    is_new_window="true"
-  fi
+  [[ "$FZF_KEY" == "ctrl-o" ]] && is_new_window="true"
 
-  selected="$selection"
-
-  if [[ -z "$selected" ]]; then
+  if [[ -z "$FZF_SELECTION" ]]; then
     echo -e "${DIM}No project selected.${RESET}"
     exit 0
   fi
 
-  # Extract project ID(s)
-  local project_ids=()
-  while IFS= read -r line; do
-    local pid
-    pid=$(echo "$line" | cut -f1)
-    project_ids+=("$pid")
-  done <<<"$selected"
+  extract_ids "$FZF_SELECTION"
+  local project_ids=("${FZF_IDS[@]}")
 
   if [[ "$MODE" == "copy" ]]; then
-    local copy_text
-    copy_text=$(printf '%s\n' "${project_ids[@]}")
-    if command -v xclip &>/dev/null; then
-      echo "$copy_text" | xclip -selection clipboard
-    elif command -v pbcopy &>/dev/null; then
-      echo "$copy_text" | pbcopy
-    elif command -v wl-copy &>/dev/null; then
-      echo "$copy_text" | wl-copy
-    else
-      echo -e "${YELLOW}Project IDs:${RESET}"
-      echo "$copy_text"
-      echo -e "${DIM}(No clipboard tool found, copy manually)${RESET}"
-    fi
-    echo -e "${GREEN}Copied ${#project_ids[@]} project ID(s) to clipboard${RESET}"
+    copy_ids_to_clipboard project_ids "project"
     exit 0
   fi
 
