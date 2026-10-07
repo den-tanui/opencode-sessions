@@ -29,6 +29,23 @@ source "${SCRIPT_DIR}/lib/helpers.sh"
 source "${SCRIPT_DIR}/lib/db.sh"
 source "${SCRIPT_DIR}/lib/format.sh"
 
+# ─── Temp file cleanup ─────────────────────────────────────────────────────────
+# Global array: register temp files, single trap cleans them all
+TEMP_FILES=()
+cleanup_temp_files() {
+  local f
+  for f in "${TEMP_FILES[@]}"; do
+    [[ -n "$f" ]] && rm -f "$f"
+  done
+}
+trap cleanup_temp_files EXIT
+reg_tmp() {
+  local f
+  f=$(mktemp) || return 1
+  TEMP_FILES+=("$f")
+  echo "$f"
+}
+
 # ─── Configuration ──────────────────────────────────────────────────────────────
 DB_PATH="${HOME}/.local/share/opencode/opencode.db"
 PREVIEW_SCRIPT="${SCRIPT_DIR}/scripts/preview.sh"
@@ -223,8 +240,7 @@ fi
 run_list() {
   # Cache session data once — avoid querying DB twice
   local cache_file
-  cache_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}"' RETURN
+  cache_file=$(reg_tmp)
 
   build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" "$DIR_FILTER" >"$cache_file"
 
@@ -255,8 +271,7 @@ run_interactive() {
 
   # Cache all session data
   local cache_file
-  cache_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}"' EXIT
+  cache_file=$(reg_tmp)
 
   build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" "$DIR_FILTER" >"$cache_file"
 
@@ -281,8 +296,7 @@ run_interactive() {
   # Format: id\tdisplay_line\ttime_updated\trepo
   # fzf shows col 2; ctrl-s just sorts on col 3 (time) or col 4 (repo)+col 3
   local display_file
-  display_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${display_file:-}" "${sort_state_file:-}"' EXIT
+  display_file=$(reg_tmp)
   format_for_display <"$cache_file" >"$display_file"
 
   local fzf_flags=()
@@ -292,7 +306,7 @@ run_interactive() {
 
   # State file for sort cycling
   local sort_state_file
-  sort_state_file=$(mktemp)
+  sort_state_file=$(reg_tmp)
   case "$SORT_BY" in
   time) echo "0" >"$sort_state_file" ;;
   directory) echo "1" >"$sort_state_file" ;;
@@ -415,8 +429,7 @@ run_projects_interactive() {
   echo -e "${CYAN}Loading projects...${RESET}" >&2
 
   local cache_file
-  cache_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}"' EXIT
+  cache_file=$(reg_tmp)
 
   build_project_data query_projects "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" >"$cache_file"
 
@@ -426,8 +439,7 @@ run_projects_interactive() {
   fi
 
   local sorted_file
-  sorted_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${sorted_file:-}"' EXIT
+  sorted_file=$(reg_tmp)
   sort -t$'\t' -k8,8rn <"$cache_file" >"$sorted_file"
 
   local fzf_flags=()
@@ -576,8 +588,7 @@ handle_project() {
   echo -e "${CYAN}Loading sessions for: ${project_name}${RESET}" >&2
 
   local cache_file
-  cache_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}"' EXIT
+  cache_file=$(reg_tmp)
 
   build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" 0 "true" "" "$project_id" >"$cache_file"
 
@@ -587,8 +598,7 @@ handle_project() {
   fi
 
   local sorted_file
-  sorted_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${sorted_file:-}"' EXIT
+  sorted_file=$(reg_tmp)
   sort_data "$SORT_BY" <"$cache_file" >"$sorted_file"
 
   local selected
