@@ -51,6 +51,30 @@ build_session_args() {
 		args+=" --ansi"
 	fi
 
+	local filter
+	filter=$(get_tmux_option @opencode-sessions-filter "")
+	if [[ -n "$filter" ]]; then
+		args+=" --filter '$filter'"
+	fi
+
+	local show_all
+	show_all=$(get_tmux_option @opencode-sessions-all false)
+	if [[ "$show_all" == "true" ]]; then
+		args+=" --all"
+	fi
+
+	local dir
+	dir=$(get_tmux_option @opencode-sessions-dir "")
+	if [[ -n "$dir" ]]; then
+		args+=" --dir '$dir'"
+	fi
+
+	local new_window
+	new_window=$(get_tmux_option @opencode-sessions-new-window false)
+	if [[ "$new_window" == "true" ]]; then
+		args+=" --new-window"
+	fi
+
 	if [[ -n "$extra" ]]; then
 		args+=" $extra"
 	fi

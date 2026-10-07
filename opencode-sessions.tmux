@@ -21,6 +21,10 @@ set_tmux_default @opencode-sessions-projects-key "O"
 set_tmux_default @opencode-sessions-popup-border "false"
 set_tmux_default @opencode-sessions-fzf-opts "--height 80% --layout=reverse"
 set_tmux_default @opencode-sessions-ansi "true"
+set_tmux_default @opencode-sessions-filter ""
+set_tmux_default @opencode-sessions-all "false"
+set_tmux_default @opencode-sessions-dir ""
+set_tmux_default @opencode-sessions-new-window "false"
 
 # ─── Key bindings ─────────────────────────────────────────────────────────────
 # Uses tmux display-popup for the outer popup. The script runs inside the

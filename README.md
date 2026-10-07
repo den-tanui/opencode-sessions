@@ -124,6 +124,10 @@ All options have sensible defaults — you only need to set the ones you want to
 | `@opencode-sessions-popup-height` | `80%` | Tmux popup height |
 | `@opencode-sessions-popup-border` | `false` | Show border around tmux popup (`true`/`false`) |
 | `@opencode-sessions-ansi` | `true` | Enable ANSI colored output with emoji icons (`true`/`false`) |
+| `@opencode-sessions-filter` | `""` | Filter sessions by status: `working`, `needs-input`, `error`, `idle` (empty = all) |
+| `@opencode-sessions-all` | `false` | Show all sessions regardless of age (`true`/`false`) |
+| `@opencode-sessions-dir` | `""` | Filter by specific directory (exact match, empty = all) |
+| `@opencode-sessions-new-window` | `false` | Open sessions in new tmux window without switching (`true`/`false`) |
 
 Example `.tmux.conf`:
 
