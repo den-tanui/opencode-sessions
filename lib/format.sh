@@ -149,15 +149,16 @@ sort_data() {
 
 # Format session data for display in fzf
 # Input: tab-delimited session data
-# Output: id\tformatted_line
+# Output: id\tdisplay_line\ttime_updated\trepo
+# Trailing sort keys allow ctrl-s to sort the file without reformatting
 format_for_display() {
 	while IFS=$'\t' read -r id status time_ago repo title model directory child_count time_updated; do
 		local icon
 		icon=$(status_icon "$status")
 		if [[ -n "$model" ]]; then
-			printf '%s\t%-8s %-10s %-20s %s [%s]\n' "$id" "$icon" "$time_ago" "$repo" "$title" "$model"
+			printf '%s\t%-8s %-10s %-20s %s [%s]\t%s\t%s\n' "$id" "$icon" "$time_ago" "$repo" "$title" "$model" "$time_updated" "$repo"
 		else
-			printf '%s\t%-8s %-10s %-20s %s\n' "$id" "$icon" "$time_ago" "$repo" "$title"
+			printf '%s\t%-8s %-10s %-20s %s\t%s\t%s\n' "$id" "$icon" "$time_ago" "$repo" "$title" "$time_updated" "$repo"
 		fi
 	done
 }

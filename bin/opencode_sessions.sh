@@ -281,11 +281,13 @@ run_interactive() {
     fi
   fi
 
-  # Sort the cached data (default: newest first)
-  local sorted_file
-  sorted_file=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${sorted_file:-}"' EXIT
-  sort_data "$SORT_BY" <"$cache_file" >"$sorted_file"
+  # Pre-format once into a sortable display file
+  # Format: id\tdisplay_line\ttime_updated\trepo
+  # fzf shows col 2; ctrl-s just sorts on col 3 (time) or col 4 (repo)+col 3
+  local display_file
+  display_file=$(mktemp)
+  trap 'rm -f "${cache_file:-}" "${display_file:-}"' EXIT
+  format_for_display <"$cache_file" >"$display_file"
 
   local fzf_flags=()
   if [[ "$MODE" == "multi" ]]; then
@@ -301,20 +303,15 @@ run_interactive() {
   *) echo "0" >"$sort_state_file" ;;
   esac
 
-  # Cycle script for sort cycling in fzf
+  # Cycle script — just sorts the display file on different columns
   local cycle_script
   cycle_script=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${sorted_file:-}" "${cycle_script:-}" "${sort_state_file:-}" "${cycle_cache:-}"' EXIT
-
-  # Copy cache data to a temp file that cycle script can read
-  local cycle_cache
-  cycle_cache=$(mktemp)
-  cp "$cache_file" "$cycle_cache"
+  trap 'rm -f "${cache_file:-}" "${display_file:-}" "${cycle_script:-}" "${sort_state_file:-}" "${footer_script:-}"' EXIT
 
   # Footer script - reads sort state and outputs footer text
   local footer_script
   footer_script=$(mktemp)
-  trap 'rm -f "${cache_file:-}" "${sorted_file:-}" "${cycle_script:-}" "${sort_state_file:-}" "${cycle_cache:-}" "${footer_script:-}"' EXIT
+  trap 'rm -f "${cache_file:-}" "${display_file:-}" "${cycle_script:-}" "${sort_state_file:-}" "${footer_script:-}"' EXIT
 
   cat >"$footer_script" <<FOOTER_EOF
 #!/usr/bin/env bash
@@ -328,53 +325,35 @@ FOOTER_EOF
 
   cat >"$cycle_script" <<CYCLE_EOF
 #!/usr/bin/env bash
-CACHE_FILE="$cycle_cache"
 STATE_FILE="$sort_state_file"
-
-sort_order=("time" "directory")
+DISPLAY_FILE="$display_file"
 
 idx=\$(cat "\$STATE_FILE")
 idx=\$(( (idx + 1) % 2 ))
 echo "\$idx" > "\$STATE_FILE"
 
-sort_field="\${sort_order[\$idx]}"
-
-USE_ANSI="$USE_ANSI"
-source "${SCRIPT_DIR}/lib/colors.sh"
-
-format_for_display() {
-    while IFS=\$'\\t' read -r id status time_ago repo title model directory child_count; do
-        local icon
-        icon=\$(status_icon "\$status")
-        if [[ -n "\$model" ]]; then
-            printf '%s\\t%-8s %-10s %-20s %s [%s]\\n' "\$id" "\$icon" "\$time_ago" "\$repo" "\$title" "\$model"
-        else
-            printf '%s\\t%-8s %-10s %-20s %s\\n' "\$id" "\$icon" "\$time_ago" "\$repo" "\$title"
-        fi
-    done
-}
-
-sort_data() {
-    case "\$1" in
-        time) cat ;;
-        directory) awk -F'\\t' '
-            { if (\$9 > max[\$4]) max[\$4] = \$9; lines[NR] = \$0; repos[NR] = \$4 }
-            END { for (i = 1; i <= NR; i++) print max[repos[i]] "\\t" lines[i] }
-        ' | sort -t'\\t' -k1,1rn -k10,10rn | cut -f2- ;;
-    esac
-}
-
-sort_data "\$sort_field" < "\$CACHE_FILE" | format_for_display
+if [[ "\$idx" == "0" ]]; then
+    sort -t\$'\\t' -k3,3rn "\$DISPLAY_FILE"
+else
+    sort -t\$'\\t' -k4,4 -k3,3rn "\$DISPLAY_FILE"
+fi
 CYCLE_EOF
   chmod +x "$cycle_script"
 
-  # Run fzf with footer and alt-s sort cycling
+  # Initial sort
+  local initial_sort_cmd
+  case "$SORT_BY" in
+  directory) initial_sort_cmd="sort -t$'\t' -k4,4 -k3,3rn" ;;
+  *) initial_sort_cmd="sort -t$'\t' -k3,3rn" ;;
+  esac
+
+  # Run fzf with footer and ctrl-s sort cycling
   local selected
-  selected=$(format_for_display <"$sorted_file" | fzf \
+  selected=$($initial_sort_cmd <"$display_file" | fzf \
     $FZF_OPTS \
     $FZF_TMUX_OPTS \
     --expect=ctrl-o \
-    --with-nth 2.. \
+    --with-nth 2 \
     --border-label " OpenCode Sessions " \
     --preview "USE_ANSI=${USE_ANSI} bash '${PREVIEW_SCRIPT}' {}" \
     --preview-window "right:60%,border-left" \
