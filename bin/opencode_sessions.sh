@@ -221,15 +221,19 @@ fi
 # ─── List mode ────────────────────────────────────────────────────────────────
 
 run_list() {
-  # Get counts for display
-  local filtered_count=0
-  local total_count=0
+  # Cache session data once — avoid querying DB twice
+  local cache_file
+  cache_file=$(mktemp)
+  trap 'rm -f "${cache_file:-}"' RETURN
 
-  # Count filtered sessions
-  filtered_count=$(build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" "$DIR_FILTER" | wc -l)
+  build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" "$DIR_FILTER" >"$cache_file"
 
-  # Get total count if filtering
+  local filtered_count
+  filtered_count=$(wc -l <"$cache_file")
+
+  # Show count header if filtering
   if [[ "$SHOW_ALL" != "true" && "$DAYS_FILTER" -gt 0 ]]; then
+    local total_count
     total_count=$(get_total_count "$DB_PATH")
     if [[ "$filtered_count" != "$total_count" ]]; then
       echo -e "${DIM}Showing ${filtered_count} of ${total_count} sessions (last ${DAYS_FILTER} days)${RESET}"
@@ -239,7 +243,7 @@ run_list() {
   echo -e "${WHITE}$(printf '%-8s' 'Status') $(printf '%-10s' 'Updated') $(printf '%-20s' 'Repo') Session Title [Model]${RESET}"
   echo -e "${DIM}$(printf '%.0s─' {1..100})${RESET}"
 
-  build_session_data query_all_sessions "$FILTER_STATUS" "$DB_PATH" "$DAYS_FILTER" "$SHOW_ALL" "$DIR_FILTER" | sort_data "$SORT_BY" | format_for_list | while IFS=$'\t' read -r line; do
+  sort_data "$SORT_BY" <"$cache_file" | format_for_list | while IFS=$'\t' read -r line; do
     echo -e "$line"
   done
 }
