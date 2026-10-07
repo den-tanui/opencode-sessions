@@ -107,6 +107,12 @@ bind_popup_key() {
 	local popup_cmd="${script}${args}"
 
 	# Register the key binding via tmux bind-key
-	tmux bind-key -n "$key" run-shell -b \
+	# -n = root table (no prefix); without -n = prefix table (requires prefix)
+	local bind_args=()
+	if [[ "$(get_tmux_option @opencode-sessions-use-prefix false)" != "true" ]]; then
+		bind_args+=(-n)
+	fi
+
+	tmux bind-key "${bind_args[@]}" "$key" run-shell -b \
 		"tmux display-popup ${border_flag} -w '${width}' -h '${height}' -xC -yC -E \"${popup_cmd}\""
 }

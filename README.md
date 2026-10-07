@@ -128,6 +128,7 @@ All options have sensible defaults — you only need to set the ones you want to
 | `@opencode-sessions-all` | `false` | Show all sessions regardless of age (`true`/`false`) |
 | `@opencode-sessions-dir` | `""` | Filter by specific directory (exact match, empty = all) |
 | `@opencode-sessions-new-window` | `false` | Open sessions in new tmux window without switching (`true`/`false`) |
+| `@opencode-sessions-use-prefix` | `false` | Require tmux prefix key before binding (`true`/`false`) |
 
 Example `.tmux.conf`:
 
