@@ -74,6 +74,7 @@ compute_status() {
 }
 
 # Status icon based on session status
+# Uses colored emoji with ANSI, plain ASCII without
 status_icon() {
 	case "$1" in
 	needs-input) echo -e "${YELLOW}🟡${RESET}" ;;
@@ -81,6 +82,17 @@ status_icon() {
 	working) echo -e "${GREEN}🟢${RESET}" ;;
 	idle) echo -e "${DIM}⚪${RESET}" ;;
 	*) echo -e "${DIM}⚪${RESET}" ;;
+	esac
+}
+
+# Plain status icon (no color codes, for non-ANSI mode)
+status_icon_plain() {
+	case "$1" in
+	needs-input) echo "?" ;;
+	error) echo "!" ;;
+	working) echo "*" ;;
+	idle) echo "." ;;
+	*) echo "." ;;
 	esac
 }
 

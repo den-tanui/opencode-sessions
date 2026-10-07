@@ -47,7 +47,15 @@ get_current_tmux_session() {
 
 DAYS_FILTER=7
 SORT_BY="time"
-FZF_OPTS="--height 100% --ansi --layout=reverse --border"
+FZF_OPTS="--height 100% --layout=reverse --border"
+
+# Detect --ansi in FZF_OPTS to enable colored output
+if echo "$FZF_OPTS" | grep -qw -- '--ansi'; then
+  USE_ANSI=true
+else
+  USE_ANSI=false
+fi
+source "${SCRIPT_DIR}/lib/colors.sh"
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 MODE="interactive"
@@ -60,6 +68,7 @@ PROJECT_FILTER=""
 TMUX_POPUP=false
 TMUX_OPTS_ARG=""
 PREFIX=""
+ANSI_FLAG=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -118,6 +127,10 @@ while [[ $# -gt 0 ]]; do
     TMUX_OPTS_ARG="${1#--tmux=}"
     shift
     ;;
+  --ansi)
+    ANSI_FLAG=true
+    shift
+    ;;
   --fzf-opts)
     FZF_OPTS="$2"
     shift 2
@@ -149,6 +162,7 @@ while [[ $# -gt 0 ]]; do
     echo "  --projects      Browse projects instead of sessions"
     echo "  --tmux [OPTS]   Open fzf in a floating tmux popup (requires tmux 3.3+)"
     echo "                  OPTS: e.g. center,80%,50% or right,40% (default: center,80%)"
+    echo "  --ansi          Enable ANSI colored output (status indicators, headers, preview)"
     echo "  --fzf-opts OPTS Custom fzf options (overrides default)"
     echo "  --prefix STR    Tmux session name prefix"
     echo "  --new-window    Open session in new window without switching tmux"
@@ -161,6 +175,17 @@ while [[ $# -gt 0 ]]; do
     ;;
   esac
 done
+
+# ─── Re-evaluate ANSI after arg parsing ──────────────────────────────────────
+# --ansi flag or --ansi in --fzf-opts enables colored output
+if [[ "$ANSI_FLAG" == "true" ]] || echo "$FZF_OPTS" | grep -qw -- '--ansi'; then
+  USE_ANSI=true
+  # Ensure --ansi is in FZF_OPTS for fzf itself
+  echo "$FZF_OPTS" | grep -qw -- '--ansi' || FZF_OPTS="--ansi $FZF_OPTS"
+else
+  USE_ANSI=false
+fi
+source "${SCRIPT_DIR}/lib/colors.sh"
 
 # ─── Validation ───────────────────────────────────────────────────────────────
 if [[ ! -f "$DB_PATH" ]]; then
@@ -314,16 +339,33 @@ echo "\$idx" > "\$STATE_FILE"
 
 sort_field="\${sort_order[\$idx]}"
 
+USE_ANSI="$USE_ANSI"
+if [[ "\$USE_ANSI" == "true" ]]; then
+    RED=\$'\\033[0;31m'; GREEN=\$'\\033[0;32m'; YELLOW=\$'\\033[0;33m'; DIM=\$'\\033[2m'; RESET=\$'\\033[0m'
+else
+    RED=''; GREEN=''; YELLOW=''; DIM=''; RESET=''
+fi
+
 format_for_display() {
     while IFS=\$'\\t' read -r id status time_ago repo title model directory child_count; do
         local icon
-        case "\$status" in
-            needs-input) icon=\$'\\033[0;33m🟡\\033[0m' ;;
-            error)       icon=\$'\\033[0;31m🔴\\033[0m' ;;
-            working)     icon=\$'\\033[0;32m🟢\\033[0m' ;;
-            idle)        icon=\$'\\033[2m⚪\\033[0m' ;;
-            *)           icon=\$'\\033[2m⚪\\033[0m' ;;
-        esac
+        if [[ "\$USE_ANSI" == "true" ]]; then
+            case "\$status" in
+                needs-input) icon="\${YELLOW}🟡\${RESET}" ;;
+                error)       icon="\${RED}🔴\${RESET}" ;;
+                working)     icon="\${GREEN}🟢\${RESET}" ;;
+                idle)        icon="\${DIM}⚪\${RESET}" ;;
+                *)           icon="\${DIM}⚪\${RESET}" ;;
+            esac
+        else
+            case "\$status" in
+                needs-input) icon="?" ;;
+                error)       icon="!" ;;
+                working)     icon="*" ;;
+                idle)        icon="." ;;
+                *)           icon="." ;;
+            esac
+        fi
         if [[ -n "\$model" ]]; then
             printf '%s\\t%-8s %-10s %-20s %s [%s]\\n' "\$id" "\$icon" "\$time_ago" "\$repo" "\$title" "\$model"
         else
@@ -354,7 +396,7 @@ CYCLE_EOF
     --expect=ctrl-o \
     --with-nth 2.. \
     --border-label " OpenCode Sessions " \
-    --preview "bash '${PREVIEW_SCRIPT}' {}" \
+    --preview "USE_ANSI=${USE_ANSI} bash '${PREVIEW_SCRIPT}' {}" \
     --preview-window "right:60%,border-left" \
     --delimiter '\t' \
     --prompt="Select session: " \
@@ -480,7 +522,7 @@ run_projects_interactive() {
     --expect=ctrl-o \
     --with-nth 2.. \
     --border-label " OpenCode Projects " \
-    --preview "bash '${project_preview_script}' {}" \
+    --preview "USE_ANSI=${USE_ANSI} bash '${project_preview_script}' {}" \
     --preview-window "right:60%,border-left" \
     --delimiter '\t' \
     --prompt="Select project: " \
@@ -634,7 +676,7 @@ handle_project() {
     --expect=ctrl-o \
     --with-nth 2.. \
     --border-label " ${project_name} Sessions " \
-    --preview "bash '${PREVIEW_SCRIPT}' {}" \
+    --preview "USE_ANSI=${USE_ANSI} bash '${PREVIEW_SCRIPT}' {}" \
     --preview-window "right:60%,border-left" \
     --delimiter '\t' \
     --prompt="Select session: " \

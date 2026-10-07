@@ -81,7 +81,11 @@ build_project_data() {
 format_projects_for_display() {
 	while IFS=$'\t' read -r id status time_ago name session_count model worktree latest_time; do
 		local icon
-		icon=$(status_icon "$status")
+		if [[ "${USE_ANSI:-false}" == "true" ]]; then
+			icon=$(status_icon "$status")
+		else
+			icon=$(status_icon_plain "$status")
+		fi
 		if [[ -n "$model" ]]; then
 			printf '%s\t%-8s %-10s %-20s (%s sessions) [%s]\n' "$id" "$icon" "$time_ago" "$name" "$session_count" "$model"
 		else
@@ -94,7 +98,11 @@ format_projects_for_display() {
 format_projects_for_list() {
 	while IFS=$'\t' read -r id status time_ago name session_count model worktree latest_time; do
 		local icon
-		icon=$(status_icon "$status")
+		if [[ "${USE_ANSI:-false}" == "true" ]]; then
+			icon=$(status_icon "$status")
+		else
+			icon=$(status_icon_plain "$status")
+		fi
 		if [[ -n "$model" ]]; then
 			printf '%-8s %-10s %-20s (%s sessions) [%s]\n' "$icon" "$time_ago" "$name" "$session_count" "$model"
 		else
@@ -153,7 +161,11 @@ sort_data() {
 format_for_display() {
 	while IFS=$'\t' read -r id status time_ago repo title model directory child_count time_updated; do
 		local icon
-		icon=$(status_icon "$status")
+		if [[ "${USE_ANSI:-false}" == "true" ]]; then
+			icon=$(status_icon "$status")
+		else
+			icon=$(status_icon_plain "$status")
+		fi
 		if [[ -n "$model" ]]; then
 			printf '%s\t%-8s %-10s %-20s %s [%s]\n' "$id" "$icon" "$time_ago" "$repo" "$title" "$model"
 		else
@@ -166,7 +178,11 @@ format_for_display() {
 format_for_list() {
 	while IFS=$'\t' read -r id status time_ago repo title model directory child_count time_updated; do
 		local icon
-		icon=$(status_icon "$status")
+		if [[ "${USE_ANSI:-false}" == "true" ]]; then
+			icon=$(status_icon "$status")
+		else
+			icon=$(status_icon_plain "$status")
+		fi
 		if [[ -n "$model" ]]; then
 			printf '%-8s %-10s %-20s %s [%s]\n' "$icon" "$time_ago" "$repo" "$title" "$model"
 		else

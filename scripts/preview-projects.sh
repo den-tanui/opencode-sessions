@@ -10,15 +10,28 @@ set -euo pipefail
 DB_PATH="${HOME}/.local/share/opencode/opencode.db"
 
 # Color codes (self-contained, no dependency on parent shell)
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-WHITE='\033[1;37m'
-DIM='\033[2m'
-BOLD='\033[1m'
-RESET='\033[0m'
+# Respects USE_ANSI env var passed from parent script
+if [[ "${USE_ANSI:-false}" == "true" ]]; then
+  RED='\033[0;31m'
+  GREEN='\033[0;32m'
+  YELLOW='\033[0;33m'
+  CYAN='\033[0;36m'
+  MAGENTA='\033[0;35m'
+  WHITE='\033[1;37m'
+  DIM='\033[2m'
+  BOLD='\033[1m'
+  RESET='\033[0m'
+else
+  RED=''
+  GREEN=''
+  YELLOW=''
+  CYAN=''
+  MAGENTA=''
+  WHITE=''
+  DIM=''
+  BOLD=''
+  RESET=''
+fi
 
 # Parse input - fzf passes the full line, we extract project_id from first field
 INPUT="${1:-}"
