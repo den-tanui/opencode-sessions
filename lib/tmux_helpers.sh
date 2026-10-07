@@ -107,9 +107,10 @@ bind_popup_key() {
 	local popup_cmd="${script}${args}"
 
 	# Register the key binding via tmux bind-key
-	# -n = root table (no prefix); without -n = prefix table (requires prefix)
+	# Use prefix table (requires leader key) for plain keys like "o", "p".
+	# Use root table (no prefix, -n) for modifier keys like "M-o", "C-p".
 	local bind_args=()
-	if [[ "$(get_tmux_option @opencode-sessions-use-prefix false)" != "true" ]]; then
+	if [[ "$key" =~ ^[MCS]- ]]; then
 		bind_args+=(-n)
 	fi
 
